@@ -24,3 +24,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Styling untuk Scrollbar agar menyatu dengan Dark Mode */
+::-webkit-scrollbar {
+  width: 8px;
+  /* Lebar scrollbar vertikal */
+  height: 8px;
+  /* Tinggi scrollbar horizontal */
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+  /* Warna latar belakang jalur scroll (netral gelap) */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  /* Warna pegangan scroll */
+  border-radius: 4px;
+  /* Membuat ujungnya agak membulat */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #404040;
+  /* Warna pegangan saat kursor diarahkan ke sana */
+}
