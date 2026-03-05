@@ -1,16 +1,34 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-// 1. Tambahkan import useEffect dan useRef dari React
 import { useEffect, useRef } from 'react';
 
 export default function Home() {
-  const { messages, input, handleInputChange, handleSubmit } = useChat();
+  const ruanganId = 'room-rahasia-1'; // ID ruangan kita
 
-  // 2. Buat referensi untuk elemen paling bawah
+  // Kita tambahkan setMessages untuk memasukkan riwayat obrolan
+  const { messages, input, handleInputChange, handleSubmit, setMessages } = useChat({
+    body: {
+      chatId: ruanganId
+    }
+  });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 3. Efek untuk auto-scroll setiap kali 'messages' berubah
+  // Efek untuk mengambil riwayat saat pertama kali halaman dibuka
+  useEffect(() => {
+    fetch(`/api/chat?chatId=${ruanganId}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.length > 0) {
+          // Masukkan data dari database ke layar
+          setMessages(data);
+        }
+      })
+      .catch(err => console.error("Gagal memuat riwayat:", err));
+  }, [setMessages, ruanganId]);
+
+  // Efek untuk auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -37,8 +55,8 @@ export default function Home() {
           >
             <div
               className={`max-w-[85%] sm:max-w-[75%] p-4 rounded-2xl ${m.role === 'user'
-                  ? 'bg-blue-600 text-white rounded-br-sm shadow-md'
-                  : 'bg-neutral-800 text-neutral-200 rounded-bl-sm border border-neutral-700 shadow-sm'
+                ? 'bg-blue-600 text-white rounded-br-sm shadow-md'
+                : 'bg-neutral-800 text-neutral-200 rounded-bl-sm border border-neutral-700 shadow-sm'
                 }`}
             >
               <span className="text-[11px] font-bold opacity-50 block mb-1 uppercase tracking-wider">
@@ -48,7 +66,6 @@ export default function Home() {
             </div>
           </div>
         ))}
-        {/* 4. Titik jangkar tidak terlihat di paling bawah */}
         <div ref={messagesEndRef} />
       </div>
 
