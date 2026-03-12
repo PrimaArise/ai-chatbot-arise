@@ -3,6 +3,9 @@ import { NextResponse } from 'next/server';
 import { groq } from '@ai-sdk/groq';
 import { streamText } from 'ai';
 
+// Paksa agar selalu dipanggil secara dinamis (tidak di-cache) untuk membantu streaming
+export const dynamic = 'force-dynamic';
+
 // GET: Mengambil history chat berdasarkan chatId
 export async function GET(req: Request) {
     try {
@@ -56,8 +59,11 @@ export async function POST(req: Request) {
 
         // 3. Panggil AI dengan Groq
         const result = streamText({
+            // Pilih model yang sangat cepat
             model: groq('llama-3.3-70b-versatile'),
             messages: messages,
+            // Opsional: Suhu sedikit diturunkan agar generasinya lebih stabil
+            temperature: 0.7,
             onFinish: async ({ text }) => {
                 // 4. Simpan jawaban AI ke database setelah selesai streaming
                 try {
