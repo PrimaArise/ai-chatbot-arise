@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 import { groq } from '@ai-sdk/groq';
-import { streamText } from 'ai';
+import { streamText, smoothStream } from 'ai';
 
 // Paksa agar selalu dipanggil secara dinamis (tidak di-cache) untuk membantu streaming
 export const dynamic = 'force-dynamic';
@@ -62,6 +62,7 @@ export async function POST(req: Request) {
             // Pilih model yang sangat cepat
             model: groq('llama-3.3-70b-versatile'),
             messages: messages,
+            experimental_transform: smoothStream(),
             // Opsional: Suhu sedikit diturunkan agar generasinya lebih stabil
             temperature: 0.7,
             onFinish: async ({ text }) => {
