@@ -1,11 +1,40 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Menu, Plus, Send, MessageSquare, Settings, MoreVertical, Edit2, Trash2, X, Check } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
+
+const ChatMessage = memo(({ m }: { m: any }) => {
+  return (
+    <div className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[90%] sm:max-w-[80%] p-4 rounded-3xl ${m.role === 'user'
+          ? 'bg-[#1a1a1a] text-white' // Gaya bubble pengguna gelap
+          : 'text-neutral-200' // Pesan AI tanpa latar yang jelas seperti Gemini
+          }`}
+      >
+        <span className="text-[11px] font-bold opacity-50 block mb-2 uppercase tracking-wider">
+          {m.role === 'user' ? 'Anda' : 'Arise'}
+        </span>
+
+        {m.role === 'user' ? (
+          <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>
+        ) : (
+          <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-neutral-900 prose-pre:border prose-pre:border-neutral-700 break-words overflow-x-auto">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {m.content}
+            </ReactMarkdown>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return prevProps.m.content === nextProps.m.content && prevProps.m.role === nextProps.m.role;
+});
 
 export default function Home() {
   const [ruanganId, setRuanganId] = useState('');
@@ -31,7 +60,7 @@ export default function Home() {
   }, []);
 
   // Kita tambahkan setMessages untuk memasukkan riwayat obrolan
-  const { messages, input, handleInputChange, handleSubmit, setMessages } = useChat({
+  const { messages, input, handleInputChange, handleSubmit, setMessages, stop } = useChat({
     body: {
       chatId: ruanganId
     }
@@ -39,6 +68,7 @@ export default function Home() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isFirstLoad = useRef(true);
+  const lastScrollTime = useRef(0);
 
   // Buat ruangan baru secara otomatis saat aplikasi dibuka
   useEffect(() => {
@@ -81,14 +111,24 @@ export default function Home() {
   // Efek untuk auto-scroll
   useEffect(() => {
     if (!isLoadingHistory && messagesEndRef.current) {
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        isFirstLoad.current = false;
-      }, 50);
+      if (isFirstLoad.current) {
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          isFirstLoad.current = false;
+        }, 50);
+      } else {
+        const now = Date.now();
+        // Throttle animasi smooth (maksimal 1 per 150ms) agar tidak lag saat terima kata yang mengalir deras
+        if (now - lastScrollTime.current > 150) {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          lastScrollTime.current = now;
+        }
+      }
     }
   }, [messages, isLoadingHistory]);
 
   const buatChatBaru = () => {
+    stop(); // Hentikan streaming jika ada
     setRuanganId(`room-${Date.now()}`);
     setMessages([]);
     // Jika di layar kecil, buka sidebar saat buat chat baru supaya kelihatan daftarnya
@@ -195,6 +235,7 @@ export default function Home() {
                 <div className={`flex items-center justify-between w-full text-left rounded-lg text-sm transition-all ${ruanganId === chat.id ? 'bg-neutral-800 text-white font-medium shadow-sm' : 'text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200'}`}>
                   <button
                     onClick={() => {
+                      stop(); // Pastikan tidak ada stream yang bocor dari chat sebelumnya
                       setRuanganId(chat.id);
                       if (window.innerWidth < 640) setIsSidebarOpen(false); // Tutup sidebar otomatis di mobile
                     }}
@@ -279,31 +320,7 @@ export default function Home() {
             <div className="flex-1 overflow-y-auto w-full">
               <div className="p-4 sm:p-6 w-full max-w-4xl mx-auto space-y-6">
                 {messages.map((m, idx) => (
-                  <div
-                    key={m.id || idx}
-                    className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[90%] sm:max-w-[80%] p-4 rounded-3xl ${m.role === 'user'
-                        ? 'bg-[#1a1a1a] text-white' // Gaya bubble pengguna gelap
-                        : 'text-neutral-200' // Pesan AI tanpa latar yang jelas seperti Gemini
-                        }`}
-                    >
-                      <span className="text-[11px] font-bold opacity-50 block mb-2 uppercase tracking-wider">
-                        {m.role === 'user' ? 'Anda' : 'Arise'}
-                      </span>
-
-                      {m.role === 'user' ? (
-                        <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>
-                      ) : (
-                        <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-neutral-900 prose-pre:border prose-pre:border-neutral-700 break-words overflow-x-auto">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {m.content}
-                          </ReactMarkdown>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <ChatMessage key={m.id || idx} m={m} />
                 ))}
                 <div ref={messagesEndRef} />
               </div>

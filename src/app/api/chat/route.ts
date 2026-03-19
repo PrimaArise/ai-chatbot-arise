@@ -62,7 +62,7 @@ export async function POST(req: Request) {
             // Pilih model yang sangat cepat
             model: groq('llama-3.3-70b-versatile'),
             messages: messages,
-            experimental_transform: smoothStream(),
+            experimental_transform: smoothStream({ delayInMs: 20, chunking: 'word' }),
             // Opsional: Suhu sedikit diturunkan agar generasinya lebih stabil
             temperature: 0.7,
             onFinish: async ({ text }) => {

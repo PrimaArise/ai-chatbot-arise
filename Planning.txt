@@ -1,0 +1,61 @@
+Tahap Perencanaan
+Fase 1: Preparasi Ekosistem & Keamanan
+Melakukan pendaftaran akun pada Groq Console untuk mendapatkan akses ke model Llama 3.
+Melakukan generate API Key sebagai kredensial keamanan untuk autentikasi request.
+Inisialisasi proyek menggunakan framework Next.js sebagai basis aplikasi web.
+Fase 2: Instalasi & Konfigurasi SDK
+Menginstal library inti ai (Vercel AI SDK) dan @ai-sdk/openai untuk menjembatani aplikasi dengan Groq.
+Mengatur variabel lingkungan (environment variables) di .env.local untuk menyimpan API Key secara aman.
+Fase 3: Konstruksi API Route
+Membangun endpoint API (Backend) yang akan menangani lalu lintas pesan antara pengguna dan AI.
+Konfigurasi klien SDK agar terhubung langsung ke gateway Groq di https://api.groq.com/openai/v1.
+
+Fase 4: Arsitektur Komponen Frontend
+Merancang komponen antarmuka chat, termasuk area riwayat pesan dan kolom input teks.
+Mengintegrasikan hook useChat untuk mengelola state percakapan secara otomatis di sisi klien.
+Fase 5: Implementasi Real-time Streaming
+Menghubungkan UI dengan API Backend untuk mengaktifkan fitur pengiriman pesan.
+Melakukan pengujian intensif pada fitur streaming untuk memastikan teks muncul secara mengalir tanpa hambatan.
+Fase 6: Finalisasi Visual & Responsivitas
+Penerapan framework CSS (seperti Tailwind) untuk merapikan estetika gelembung chat dan tata letak.
+Optimasi tampilan agar adaptif dan nyaman digunakan baik melalui perangkat desktop maupun mobile.
+
+Timeline Pengerjaan Minggu Ke - 1
+Membaca dokumentasi dasar Vercel AI SDK (ai/rsc atau ai/react) untuk memahami konsep bagaimana frontend mengirim pesan ke backend.
+Menginisialisasi project Next.js baru dan memastikannya berjalan lancar di localhost:3000.
+Menginisialisasi repositori Git pada proyek, membuat commit pertama, dan menghubungkannya ke remote repository seperti GitHub atau GitLab untuk menyimpan riwayat kode dengan aman.
+Menginstal library untuk tampilan dasar seperti Tailwind CSS.
+Membuat halaman utama (page.tsx) dengan layout kerangka antarmuka yang mencakup area chat di tengah dan kolom input teks di bagian bawah.
+Membuat komponen visual gelembung obrolan (chat bubble) dengan warna yang dibedakan antara pesan pengguna dan pesan AI.
+Mengatur interaksi antarmuka dasar dengan memastikan saat tombol kirim ditekan, teks dari kolom input berpindah ke area obrolan menggunakan data sementara terlebih dahulu.
+
+Timeline Pengerjaan Minggu Ke - 2
+Mempelajari konsep dasar LLM, API, dan peran Groq sebagai mesin pemroses berkecepatan tinggi.
+Mempelajari praktik keamanan dasar khususnya cara menyimpan rahasia seperti API Key secara aman di Next.js menggunakan file .env.local agar tidak bocor.
+Mendaftar akun di platform Groq Cloud, membuat API Key, dan memasukkannya ke dalam environment variable proyek.
+Membuat file API Route di Next.js pada folder app/api/chat/route.ts sebagai jalur komunikasi data.
+Menulis kode di backend untuk menerima pesan dari pengguna dan meneruskannya ke Groq menggunakan Vercel AI SDK.
+Menerapkan fungsi memori sesi di mana seluruh rentetan pesan dalam satu obrolan yang sedang aktif dikirimkan ke Groq agar AI mengerti konteks pembicaraan.
+Menyambungkan tampilan frontend dengan backend dan menguji coba percakapan interaktif berbalas-balasan.
+Melakukan commit dan push pembaruan kode ke repositori Git.
+
+Timeline Pengerjaan Minggu Ke - 3
+Memahami konsep data streaming dan mengubah logika di frontend untuk mendukung fitur respons mengalir menggunakan hook useChat.
+Membuat akun di Supabase dengan paket gratis, membuat project baru, dan memasukkan URL serta Anon Key Supabase ke dalam file .env.local.
+Membuat tabel di Supabase untuk menyimpan data obrolan seperti tabel chats untuk menyimpan daftar sesi obrolan dan tabel messages untuk menyimpan isi pesannya.
+Menulis logika di API Route agar setiap pesan baru yang dikirim atau diterima otomatis tersimpan ke tabel Supabase.
+Membuat fitur sidebar riwayat obrolan yang akan memuat data dari Supabase saat diklik, menampilkannya di layar, dan menjadikannya sebagai konteks agar AI kembali mengingat topik di sesi tersebut persis seperti ChatGPT atau Gemini.
+Menginstal library react-markdown dan menerapkannya agar tabel, kode pemrograman, dan daftar poin dari AI dirender dengan rapi.
+Menambahkan fitur auto-scroll agar layar otomatis menggulir ke bawah saat pesan baru sedang diketik oleh AI.
+Melakukan commit dan push pembaruan kode ke repositori Git.
+
+Timeline Pengerjaan Minggu Ke - 4
+Menyempurnakan desain antarmuka dengan merapikan tata letak menggunakan Tailwind CSS agar kombinasi warna, ukuran font, jarak, dan visual keseluruhan terlihat rapi, modern, dan profesional.
+Menyempurnakan status visual dengan menambahkan tampilan instruksi awal saat obrolan masih kosong dan animasi loading saat aplikasi sedang memuat riwayat lama dari Supabase.
+Melakukan pengujian manual menyeluruh untuk memastikan memori obrolan aktif berjalan baik, riwayat Supabase termuat benar, dan format Markdown dirender dengan sempurna.
+Membersihkan dan merapikan baris kode termasuk menghapus kode-kode bekas percobaan atau console.log yang sudah tidak terpakai.
+Menyusun dokumentasi tertulis dalam file README.md di repositori yang menjelaskan tentang aplikasi, fitur-fitur, cara instalasi lokal, dan panduan mengatur .env.local agar proyek mudah dijalankan oleh orang lain atau Anda di masa depan.
+Memastikan semua kode versi final dan file README.md sudah di-commit dan di-push ke repositori Git utama.
+Membuat atau menyiapkan akun Vercel dan menghubungkannya dengan repositori Git Anda.
+Melakukan proses deployment ke Vercel dengan memastikan semua environment variables seperti API Key Groq dan kredensial Supabase sudah dimasukkan ke pengaturan Vercel.
+Mengakses URL publik Vercel dan menguji aplikasi langsung dari browser komputer atau laptop untuk memastikan semuanya siap digunakan.
