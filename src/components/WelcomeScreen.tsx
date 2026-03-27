@@ -19,13 +19,31 @@ export default function WelcomeScreen({ input, handleInputChange, handleSubmit }
       </div>
 
       <div className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl p-2 shrink-0 shadow-lg">
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <input
-            className="flex-1 p-4 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none text-lg"
+        <form onSubmit={(e) => {
+          handleSubmit(e);
+          const ta = e.currentTarget.querySelector('textarea');
+          if (ta) ta.style.height = 'auto';
+        }} className="flex gap-2 items-end">
+          <textarea
+            className="flex-1 p-4 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none text-lg resize-none min-h-[60px] max-h-[200px] overflow-y-auto"
             value={input}
             placeholder="Ketik Sesuatu..."
             onChange={handleInputChange}
             autoFocus
+            rows={1}
+            onInput={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              target.style.height = 'auto';
+              target.style.height = `${target.scrollHeight}px`;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (input.trim()) {
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }
+            }}
           />
           <button
             type="submit"

@@ -4,8 +4,18 @@ import { useChat } from '@ai-sdk/react';
 import { useEffect, useRef, useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Menu, Plus, Send, MessageSquare, Settings, MoreVertical, Edit2, Trash2, X, Check } from 'lucide-react';
+import { Menu, Plus, Send, MessageSquare, Settings, MoreVertical, Edit2, Trash2, X, Check, Copy, Square } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css';
+import toast, { Toaster } from 'react-hot-toast';
+
+const extractText = (node: any): string => {
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (node && node.props && node.props.children) return extractText(node.props.children);
+  return '';
+};
 
 const ChatMessage = memo(({ m }: { m: any }) => {
   return (
@@ -23,8 +33,35 @@ const ChatMessage = memo(({ m }: { m: any }) => {
         {m.role === 'user' ? (
           <p className="leading-relaxed whitespace-pre-wrap">{m.content}</p>
         ) : (
-          <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-neutral-900 prose-pre:border prose-pre:border-neutral-700 break-words overflow-x-auto">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0 break-words overflow-x-auto">
+            <ReactMarkdown 
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                pre({ node, className, children, ...props }: any) {
+                  return (
+                    <div className="relative group my-4">
+                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                        <button
+                          onClick={() => {
+                            const rawContent = extractText(children);
+                            navigator.clipboard.writeText(rawContent);
+                            toast.success('Kode disalin!', { id: 'copy-toast' });
+                          }}
+                          className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded border border-neutral-700 cursor-pointer shadow-sm"
+                          title="Copy Code"
+                        >
+                          <Copy size={16} />
+                        </button>
+                      </div>
+                      <pre {...props} className={`${className || ''} bg-neutral-900 border border-neutral-800 rounded-xl p-4 overflow-x-auto text-[13px] leading-relaxed`}>
+                        {children}
+                      </pre>
+                    </div>
+                  );
+                }
+              }}
+            >
               {m.content}
             </ReactMarkdown>
           </div>
@@ -59,10 +96,18 @@ export default function Home() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Kita tambahkan setMessages untuk memasukkan riwayat obrolan
-  const { messages, input, handleInputChange, handleSubmit, setMessages, stop } = useChat({
+  // ==========================================================================
+  // [useChat] KONEKSI KE MESIN AI
+  // Mengendalikan pengiriman form secara otomatis ke /api/chat. 
+  // Juga mengurus aliran teks (streaming) dan mencatat apa yang Anda ketik (input).
+  // ==========================================================================
+  const { messages, input, handleInputChange, handleSubmit, setMessages, stop, isLoading } = useChat({
     body: {
       chatId: ruanganId
+    },
+    onError: () => {
+      // Jika internet mati atau AI gagal merespons, munculkan pop-up error merah
+      toast.error('Gagal terhubung ke AI. Silakan coba lagi.', { id: 'ai-error' });
     }
   });
 
@@ -70,42 +115,49 @@ export default function Home() {
   const isFirstLoad = useRef(true);
   const lastScrollTime = useRef(0);
 
-  // Buat ruangan baru secara otomatis saat aplikasi dibuka
+  // ==========================================================================
+  // [EFEK] PEMBUATAN RUANG OBROLAN PERTAMA KALI KETIKA WEB TERBUKA
+  // Sengaja membuat ID unik berdasarkan detik saat ini.
+  // ==========================================================================
   useEffect(() => {
     const defaultRoom = `room-${Date.now()}`;
     setRuanganId(defaultRoom);
-    setIsLoadingHistory(false); // Jangan loading di ruangan baru agar Front Page langsung muncul
+    setIsLoadingHistory(false); 
   }, []);
 
-  // Efek untuk mengambil daftar chat sidebar
+  // ==========================================================================
+  // [EFEK] MENGAMBIL DAFTAR SEMUA RIWAYAT UNTUK DITAMPILKAN DI SIDEBAR
+  // Fungsi ini otomatis mengeksekusi /api/chats setiap kali jumlah pesan berubah,
+  // sehingga daftar judul obrolan di sidebar sebelah kiri selalu Sinkron & Terupdate.
+  // ==========================================================================
   useEffect(() => {
     fetch('/api/chats')
       .then(res => res.json())
       .then(data => {
-        if (data && Array.isArray(data)) {
-          setChatList(data);
-        }
+        if (data && Array.isArray(data)) setChatList(data);
       })
-      .catch(err => console.error("Gagal memuat daftar chat:", err));
-  }, [messages.length]); // Refresh saat pesan/chat baru bertambah
+      .catch(() => {}); // Tangkapan error sengaja dikosongkan agar konsol terminal tetap bersih
+  }, [messages.length]);
 
-  // Efek untuk mengambil riwayat / id ruangan berubah
+  // ==========================================================================
+  // [EFEK] MEMUAT PESAN LAMA SETIAP KALI PINDAH RUANG OBROLAN
+  // Ketika ruanganId berpindah (karena di-klik dari sidebar), layar akan dikosongkan 
+  // sejenak lalu menarik paket percakapan lama langsung dari Supabase.
+  // ==========================================================================
   useEffect(() => {
-    if (!ruanganId) return; // Jika belum ada ID dari useEffect pertama, jangan jalankan
+    if (!ruanganId) return; 
 
-    isFirstLoad.current = true; // Tandai bahwa ini baru load ruangan
-    setMessages([]); // Kosongkan saat pindah ruangan
-    setIsLoadingHistory(true); // Mulai loading
+    isFirstLoad.current = true;
+    setMessages([]); // Dikosongkan sebelum memuat
+    setIsLoadingHistory(true);
+    
     fetch(`/api/chat?chatId=${ruanganId}`)
       .then(res => res.json())
       .then(data => {
-        if (data && data.length > 0) {
-          // Masukkan data dari database ke layar
-          setMessages(data);
-        }
+        if (data && data.length > 0) setMessages(data);
       })
-      .catch(err => console.error("Gagal memuat riwayat:", err))
-      .finally(() => setIsLoadingHistory(false)); // Selesai loading
+      .catch(() => {}) // Console log dihapus demi kebersihan
+      .finally(() => setIsLoadingHistory(false));
   }, [setMessages, ruanganId]);
 
   // Efek untuk auto-scroll
@@ -127,11 +179,15 @@ export default function Home() {
     }
   }, [messages, isLoadingHistory]);
 
+  // ==========================================================================
+  // [FUNGSI] NAVIGASI & AKSI KHUSUS
+  // Di bawah ini berisikan blok khusus untuk memulai, menghapus, dan mengganti nama obrolan
+  // ==========================================================================
+
   const buatChatBaru = () => {
-    stop(); // Hentikan streaming jika ada
+    stop(); // Selalu potong komunikasi AI kalau mencoba lari ke ruangan baru
     setRuanganId(`room-${Date.now()}`);
     setMessages([]);
-    // Jika di layar kecil, buka sidebar saat buat chat baru supaya kelihatan daftarnya
     if (window.innerWidth < 640) setIsSidebarOpen(true);
   };
 
@@ -139,20 +195,15 @@ export default function Home() {
     setIsSidebarOpen(!isSidebarOpen);
   };
 
-
-
   const handleDeleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm('Apakah Anda yakin ingin menghapus obrolan ini?')) {
+    if (confirm('Apakah Anda yakin ingin menghapus obrolan ini secara permanen?')) {
       try {
         await fetch(`/api/chats/${id}`, { method: 'DELETE' });
+        // Hapus dari daftar memori layar agar tidak perlu me-refresh halaman website
         setChatList(prev => prev.filter(c => c.id !== id));
-        if (ruanganId === id) {
-          buatChatBaru();
-        }
-      } catch (err) {
-        console.error('Gagal menghapus chat:', err);
-      }
+        if (ruanganId === id) buatChatBaru();
+      } catch (err) {}
     }
     setDropdownOpenId(null);
   };
@@ -169,10 +220,13 @@ export default function Home() {
       e.preventDefault();
       e.stopPropagation();
     }
+    
+    // Cegah pekerjaan boros jika judul yang diketik sama saja atau kosong
     if (!editTitleBuffer.trim() || editTitleBuffer === chatList.find(c => c.id === id)?.title) {
         setEditingChatId(null);
         return;
     }
+
     try {
         await fetch(`/api/chats/${id}`, {
             method: 'PATCH',
@@ -180,9 +234,7 @@ export default function Home() {
             body: JSON.stringify({ title: editTitleBuffer.trim() })
         });
         setChatList(prev => prev.map(c => c.id === id ? { ...c, title: editTitleBuffer.trim() } : c));
-    } catch (err) {
-        console.error('Gagal merename chat:', err);
-    }
+    } catch (err) {}
     setEditingChatId(null);
   };
 
@@ -195,6 +247,7 @@ export default function Home() {
 
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
+      <Toaster position="top-center" toastOptions={{ style: { background: '#262626', color: '#fff', border: '1px solid #404040' } }} />
       {/* Sidebar */}
       <div
         className={`${isSidebarOpen ? 'w-64' : 'w-0'
@@ -328,13 +381,42 @@ export default function Home() {
 
             {/* Area Input (Sticky bawah) saat chat aktif */}
             <div className="w-full shrink-0 bg-transparent p-4 pb-6">
+              {isLoading && (
+                <div className="flex justify-center mb-3">
+                  <button
+                    onClick={stop}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 rounded-full text-sm font-medium transition-colors shadow-sm cursor-pointer"
+                  >
+                    <Square size={14} className="fill-neutral-400" />
+                    Stop Generation
+                  </button>
+                </div>
+              )}
               <div className="max-w-4xl mx-auto bg-neutral-900 border border-neutral-800 rounded-2xl p-2 shadow-lg">
-                <form onSubmit={handleSubmit} className="flex gap-2">
-                  <input
-                    className="flex-1 p-3 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none"
+                <form onSubmit={(e) => {
+                  handleSubmit(e);
+                  const ta = e.currentTarget.querySelector('textarea');
+                  if (ta) ta.style.height = 'auto';
+                }} className="flex gap-2 items-end">
+                  <textarea
+                    className="flex-1 p-3 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none min-h-[48px] max-h-[200px] overflow-y-auto"
                     value={input}
                     placeholder="Minta AI..."
                     onChange={handleInputChange}
+                    rows={1}
+                    onInput={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      target.style.height = 'auto';
+                      target.style.height = `${target.scrollHeight}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (input.trim()) {
+                          e.currentTarget.form?.requestSubmit();
+                        }
+                      }
+                    }}
                   />
                   <button
                     type="submit"
