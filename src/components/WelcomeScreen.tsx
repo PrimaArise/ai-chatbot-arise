@@ -19,11 +19,17 @@ export default function WelcomeScreen({ input, handleInputChange, handleSubmit }
       </div>
 
       <div className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl p-2 shrink-0 shadow-lg">
+        {/* 
+          Form pengiriman pesan.
+          Event onSubmit dicegat sebentar untuk memastikan ukuran textarea kembali mengecil (auto) setelah pesan dikirim.
+        */}
         <form onSubmit={(e) => {
           handleSubmit(e);
           const ta = e.currentTarget.querySelector('textarea');
           if (ta) ta.style.height = 'auto';
         }} className="flex gap-2 items-end">
+          
+          {/* Textarea kustom: Bisa memanjang ke bawah otomatis dan mentolerir tombol Enter */}
           <textarea
             className="flex-1 p-4 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none text-lg resize-none min-h-[60px] max-h-[200px] overflow-y-auto"
             value={input}
@@ -31,16 +37,18 @@ export default function WelcomeScreen({ input, handleInputChange, handleSubmit }
             onChange={handleInputChange}
             autoFocus
             rows={1}
+            // onInput: Menghitung secara dinamis seberapa panjang teks, lalu mengubah tinggi (height) elemen
             onInput={(e) => {
               const target = e.target as HTMLTextAreaElement;
               target.style.height = 'auto';
               target.style.height = `${target.scrollHeight}px`;
             }}
+            // onKeyDown: Mengirim form saat Enter ditekan (tanpa menahan Shift)
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
+                e.preventDefault(); // Cegah fungsi bawaan Enter (ganti baris)
                 if (input.trim()) {
-                  e.currentTarget.form?.requestSubmit();
+                  e.currentTarget.form?.requestSubmit(); // Lemparkan eksekusi ke onSubmit form
                 }
               }
             }}

@@ -10,6 +10,8 @@ import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import toast, { Toaster } from 'react-hot-toast';
 
+// Fungsi pembantu (helper) untuk mengekstrak isi teks murni dari elemen React.
+// Digunakan oleh fitur Tombol Copy untuk menarik kode pemrograman dari dalam format rendering Markdown.
 const extractText = (node: any): string => {
   if (typeof node === 'string') return node;
   if (Array.isArray(node)) return node.map(extractText).join('');
@@ -38,14 +40,16 @@ const ChatMessage = memo(({ m }: { m: any }) => {
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
               components={{
+                // Menimpa blok kode bawaan bawaan markdown (<pre>) dengan elemen kustom
                 pre({ node, className, children, ...props }: any) {
                   return (
                     <div className="relative group my-4">
+                      {/* Tombol Copy yang akan muncul saat mouse diarahkan (hover) ke blok kode */}
                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                         <button
                           onClick={() => {
                             const rawContent = extractText(children);
-                            navigator.clipboard.writeText(rawContent);
+                            navigator.clipboard.writeText(rawContent); // Salin teks ke memori komputer
                             toast.success('Kode disalin!', { id: 'copy-toast' });
                           }}
                           className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded border border-neutral-700 cursor-pointer shadow-sm"
@@ -54,6 +58,8 @@ const ChatMessage = memo(({ m }: { m: any }) => {
                           <Copy size={16} />
                         </button>
                       </div>
+                      
+                      {/* Tempat asli diletakkannya kode pemrograman (syntax highlighting akan merender warnanya di sini) */}
                       <pre {...props} className={`${className || ''} bg-neutral-900 border border-neutral-800 rounded-xl p-4 overflow-x-auto text-[13px] leading-relaxed`}>
                         {children}
                       </pre>
@@ -393,11 +399,14 @@ export default function Home() {
                 </div>
               )}
               <div className="max-w-4xl mx-auto bg-neutral-900 border border-neutral-800 rounded-2xl p-2 shadow-lg">
+                {/* Sama seperti WelcomeScreen, onSubmit dimodifikasi agar textarea mereset tinggi ke ukuran awal */}
                 <form onSubmit={(e) => {
                   handleSubmit(e);
                   const ta = e.currentTarget.querySelector('textarea');
                   if (ta) ta.style.height = 'auto';
                 }} className="flex gap-2 items-end">
+                  
+                  {/* Kotak chat otomatis expand ke bawah */}
                   <textarea
                     className="flex-1 p-3 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none min-h-[48px] max-h-[200px] overflow-y-auto"
                     value={input}
