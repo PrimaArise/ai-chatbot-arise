@@ -1,102 +1,134 @@
 import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 import { groq } from '@ai-sdk/groq';
-import { streamText, smoothStream } from 'ai';
+import { streamText, smoothStream, generateText } from 'ai';
+import { getSupabaseServer } from '@/lib/supabase-server';
 
-// Menonaktifkan sistem cache bawaan Next.js agar aliran teks (streaming) tidak tertahan
 export const dynamic = 'force-dynamic';
 
-// ============================================================================
-// [GET] ROUTE: MENGAMBIL RIWAYAT CHAT
-// Fungsi ini otomatis dipanggil saat halaman dimuat untuk memunculkan pesan lama
-// ============================================================================
+// ================= GET =================
 export async function GET(req: Request) {
     try {
-        // Mengekstrak ID Obrolan saat ini dari parameter URL (?chatId=...)
+        const supabase = await getSupabaseServer();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) return NextResponse.json([], { status: 401 });
+
         const { searchParams } = new URL(req.url);
         const chatId = searchParams.get('chatId');
 
-        // Jika ID kosong, kembalikan ruang kosong
         if (!chatId) return NextResponse.json([]);
 
-        // Mencari semua pesan terkait di Supabase, dan diurutkan dari yang paling awal (asc)
+        const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+
+        if (!chat || chat.userId !== user.id) {
+            return NextResponse.json([], { status: 403 });
+        }
+
         const messages = await prisma.message.findMany({
-            where: { chatId: chatId },
+            where: { chatId },
             orderBy: { createdAt: 'asc' },
         });
 
         return NextResponse.json(messages);
     } catch (error) {
+        console.error('GET /api/chat error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }
 
-// ============================================================================
-// [POST] ROUTE: MENGIRIM PESAN KE AI DAN MENYIMPAN KE DATABASE
-// Fungsi ini dipanggil ketika user menekan enter atau memencet tombol pesawat kertas
-// ============================================================================
+// ================= POST =================
 export async function POST(req: Request) {
     try {
-        // Membaca pesan yang dikirim oleh antarmuka browser
-        const { chatId, messages } = await req.json();
+        const supabase = await getSupabaseServer();
+        const { data: { user } } = await supabase.auth.getUser();
 
-        // Keamanan: Tolak jika data tidak sesuai format
-        if (!chatId || !messages || !Array.isArray(messages)) {
-            return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        // Pesan yang baru saja diketik posisinya pasti paling terakhir di dalam susunan Array
+        const body = await req.json();
+        const { chatId, messages } = body;
+
+        if (!chatId) {
+            console.error("Missing chatId in request:", body);
+            return NextResponse.json({ error: 'Missing chatId' }, { status: 400 });
+        }
+
         const lastUserMessage = messages[messages.length - 1];
 
-        // Tahap 1: Registrasi Ruang Obrolan
-        // Memastikan judul ruangan ini ada di database supaya muncul di Sidebar kiri
+        // Karena Supabase Auth tidak secara otomatis membuat baris User di schema Prisma (public.User),
+        // Kita paksa pendaftaran lazily di sini untuk mencegah error Foreign Key Constraint P2003
+        await prisma.user.upsert({
+            where: { id: user.id },
+            update: {},
+            create: {
+                id: user.id,
+                email: user.email || 'no-email@supabase.local',
+                password: 'supabase-auth-managed'
+            }
+        });
+
+        const isNewChat = messages.length === 1;
+
+        // 🔥 Backend tetap kontrol userId
         await prisma.chat.upsert({
             where: { id: chatId },
-            update: {}, // Jika ruang obrolan sudah ada, biarkan apa adanya
+            update: {},
             create: {
                 id: chatId,
-                title: lastUserMessage.content.substring(0, 50) || 'New Chat',
+                title: (lastUserMessage?.content || 'Obrolan Baru').slice(0, 50),
+                userId: user.id,
             },
         });
 
-        // Tahap 2: Arsipkan Pesan Pengguna
-        // Menyimpan apa yang diketik manusia ke dalam Database
-        await prisma.message.create({
-            data: {
-                chatId: chatId,
-                content: lastUserMessage.content,
-                role: 'user',
-            },
-        });
+        // 🔥 Fitur Judul Cerdas (Berjalan diam-diam di background)
+        if (isNewChat && lastUserMessage?.content) {
+            generateText({
+                model: groq('llama-3.3-70b-versatile'),
+                system: 'Anda adalah asisten perangkum. Buatlah judul super singkat (maksimal 3 kata) yang mencerminkan inti topik dari pesan pengguna. Jangan gunakan tanda kutip, titik, atau gaya kutipan.',
+                prompt: lastUserMessage.content,
+            }).then(async ({ text }) => {
+                await prisma.chat.update({
+                    where: { id: chatId },
+                    data: { title: text.trim() }
+                });
+            }).catch(err => console.error('Gagal membuat judul AI:', err));
+        }
 
-        // Tahap 3: Menghubungi Mesin Groq AI
-        // Menggunakan library streamText agar teks dikirim sepotong-demi-sepotong secara real-time
+    await prisma.message.create({
+        data: {
+            chatId,
+            content: lastUserMessage.content,
+            role: 'user',
+        },
+    });
+
         const result = streamText({
             model: groq('llama-3.3-70b-versatile'),
-            messages: messages,
-            // smoothStream memastikan ketikan munculnya kata-per-kata seperti layaknya manusia mengetik
-            experimental_transform: smoothStream({ delayInMs: 20, chunking: 'word' }),
-            temperature: 0.7,
+            messages,
+            experimental_transform: smoothStream({ delayInMs: 20 }),
             onFinish: async ({ text }) => {
-                // Tahap 4: Arsipkan Pesan AI
-                // Setelah AI tuntas bicara sampai akhir, barulah seluruh kata-katanya disimpan permanen ke Database
                 try {
                     await prisma.message.create({
                         data: {
-                            chatId: chatId,
+                            chatId,
                             content: text,
                             role: 'assistant',
                         },
                     });
-                } catch (e) {
-                    // Berjalan di latar belakang sehingga abaikan log
+                } catch (dbErr) {
+                    console.error("Error saving assistant message:", dbErr);
                 }
             },
+            onError: (err) => {
+                 console.error("Error groq AI stream:", err);
+            }
         });
 
-        // Tahap 5: Kirimkan balasan ke layar pengguna
         return result.toDataStreamResponse();
     } catch (error) {
+        console.error("POST /api/chat error:", error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }
