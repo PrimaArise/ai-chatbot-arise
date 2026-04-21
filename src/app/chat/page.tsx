@@ -7,20 +7,25 @@ import { useChat } from '@ai-sdk/react';
 import { useEffect, useRef, useState, memo, Suspense, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Menu, Plus, Send, MessageSquare, Settings, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle } from 'lucide-react';
+import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Brain, Upload, FileText, Loader2, ChevronDown } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import toast, { Toaster } from 'react-hot-toast';
 
-const extractText = (node: any): string => {
+// Types for react-markdown component props
+type PreProps = React.HTMLAttributes<HTMLPreElement> & { node?: unknown };
+type ChatMsg = { id?: string; role: string; content: string };
+
+const extractText = (node: unknown): string => {
   if (typeof node === 'string') return node;
-  if (Array.isArray(node)) return node.map(extractText).join('');
-  if (node && node.props && node.props.children) return extractText(node.props.children);
+  if (Array.isArray(node)) return (node as unknown[]).map(extractText).join('');
+  const n = node as { props?: { children?: unknown } };
+  if (n && n.props && n.props.children) return extractText(n.props.children);
   return '';
 };
 
-const ChatMessage = memo(({ m }: { m: any }) => {
+const ChatMessage = memo(function ChatMessage({ m }: { m: ChatMsg }) {
   return (
     <div className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -41,7 +46,7 @@ const ChatMessage = memo(({ m }: { m: any }) => {
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
               components={{
-                pre({ node, className, children, ...props }: any) {
+                pre({ className, children, ...props }: PreProps) {
                   return (
                     <div className="relative group my-4">
                       <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
@@ -76,13 +81,12 @@ const ChatMessage = memo(({ m }: { m: any }) => {
   return prevProps.m.content === nextProps.m.content && prevProps.m.role === nextProps.m.role;
 });
 
+
 function ChatComponent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const idFromUrl = searchParams.get('id');
 
   const [ruanganId, setRuanganId] = useState('');
-  const [chatList, setChatList] = useState<any[]>([]);
+  const [chatList, setChatList] = useState<{ id: string; title: string }[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
@@ -92,6 +96,19 @@ function ChatComponent() {
   const [chatToDelete, setChatToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // ===== AI Customization Modal =====
+  const [isKostumiModal, setIsKostumiModal] = useState(false);
+  const [kostumiTab, setKostumiTab] = useState<'upload' | 'chunks'>('upload');
+  const [uploadText, setUploadText] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [ingestResult, setIngestResult] = useState<string | null>(null);
+  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string }[]>([]);
+  const [isLoadingChunks, setIsLoadingChunks] = useState(false);
+  const [deletingChunkId, setDeletingChunkId] = useState<string | null>(null);
+  const [expandedChunkId, setExpandedChunkId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -149,8 +166,8 @@ function ChatComponent() {
 
   useEffect(() => {
     if (!ruanganId) {
-      setIsLoadingHistory(false);
-      return;
+      const t = setTimeout(() => setIsLoadingHistory(false), 0);
+      return () => clearTimeout(t);
     }
 
     const loadMessages = async () => {
@@ -232,14 +249,14 @@ function ChatComponent() {
       setChatList(prev => prev.filter(c => c.id !== chatToDelete));
       if (ruanganId === chatToDelete) buatChatBaru();
       toast.success("Obrolan berhasil dihapus");
-    } catch (err) {
+    } catch {
       toast.error("Gagal menghapus obrolan");
     }
     setIsDeleting(false);
     setChatToDelete(null);
   };
 
-  const startEditing = (chat: any, e: React.MouseEvent) => {
+  const startEditing = (chat: { id: string; title: string }, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingChatId(chat.id);
     setEditTitleBuffer(chat.title);
@@ -264,7 +281,7 @@ function ChatComponent() {
         body: JSON.stringify({ title: editTitleBuffer.trim() })
       });
       setChatList(prev => prev.map(c => c.id === id ? { ...c, title: editTitleBuffer.trim() } : c));
-    } catch (err) { }
+    } catch { }
     setEditingChatId(null);
   };
 
@@ -276,6 +293,100 @@ function ChatComponent() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push('/login');
+  };
+
+  // ===== Kostumisasi AI handlers =====
+  const loadChunks = async () => {
+    setIsLoadingChunks(true);
+    try {
+      const res = await fetch('/api/documents');
+      const data = await res.json();
+      if (Array.isArray(data)) setChunks(data);
+    } catch { toast.error('Gagal memuat data chunks'); }
+    setIsLoadingChunks(false);
+  };
+
+  const openKostumiModal = () => {
+    setIsKostumiModal(true);
+    setKostumiTab('upload');
+    setIngestResult(null);
+    setUploadText('');
+    setUploadFile(null);
+    loadChunks();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setUploadFile(file);
+    if (file) {
+      const fileName = file.name.toLowerCase();
+      if (fileName.endsWith('.pdf')) {
+        // PDF dibaca server-side, tidak perlu baca di client
+        setUploadText('');
+      } else {
+        // TXT / MD — baca langsung di client sebagai preview
+        const reader = new FileReader();
+        reader.onload = (ev) => setUploadText(ev.target?.result as string || '');
+        reader.readAsText(file);
+      }
+    }
+  };
+
+  const handleIngest = async () => {
+    // Jika ada file (termasuk PDF), kirim sebagai FormData
+    if (uploadFile) {
+      setIsIngesting(true);
+      setIngestResult(null);
+      try {
+        const formData = new FormData();
+        formData.append('file', uploadFile);
+        const res = await fetch('/api/ingest', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok) {
+          setIngestResult(`✅ Berhasil mengindeks ${data.chunks?.length || 0} chunk ke knowledge base.`);
+          setUploadText('');
+          setUploadFile(null);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          loadChunks();
+        } else {
+          setIngestResult(`❌ Gagal: ${data.error || 'Unknown error'}`);
+        }
+      } catch { setIngestResult('❌ Terjadi kesalahan saat mengindeks.'); }
+      setIsIngesting(false);
+      return;
+    }
+    // Mode teks manual (JSON)
+    if (!uploadText.trim()) { toast.error('Masukkan teks terlebih dahulu'); return; }
+    setIsIngesting(true);
+    setIngestResult(null);
+    try {
+      const res = await fetch('/api/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: uploadText }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setIngestResult(`✅ Berhasil mengindeks ${data.chunks?.length || 0} chunk ke knowledge base.`);
+        setUploadText('');
+        setUploadFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        loadChunks();
+      } else {
+        setIngestResult(`❌ Gagal: ${data.error || 'Unknown error'}`);
+      }
+    } catch { setIngestResult('❌ Terjadi kesalahan saat mengindeks.'); }
+    setIsIngesting(false);
+  };
+
+  const handleDeleteChunk = async (id: string) => {
+    setDeletingChunkId(id);
+    try {
+      await fetch(`/api/documents?id=${id}`, { method: 'DELETE' });
+      setChunks(prev => prev.filter(c => c.id !== id));
+      toast.success('Chunk berhasil dihapus');
+    } catch { toast.error('Gagal menghapus chunk'); }
+    setDeletingChunkId(null);
   };
 
   const isChatEmpty = !ruanganId || messages.length === 0;
@@ -372,7 +483,17 @@ function ChatComponent() {
           ))}
         </div>
 
-        <div className="p-4 border-t border-neutral-800 shrink-0 w-64 absolute bottom-0 bg-neutral-900 z-10">
+        <div className="p-4 border-t border-neutral-800 shrink-0 w-64 absolute bottom-0 bg-neutral-900 z-10 space-y-2">
+          {/* Kostumisasi AI Button */}
+          <button
+            onClick={openKostumiModal}
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 px-4 rounded-xl font-medium transition-all shadow-sm flex items-center justify-center gap-2 text-sm whitespace-nowrap cursor-pointer border border-blue-500"
+          >
+            <Brain size={16} />
+            <span>Kostumisasi AI</span>
+          </button>
+
+          {/* Logout Button */}
           <button
             onClick={(e) => {
               if (isLoading) {
@@ -512,6 +633,198 @@ function ChatComponent() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Kostumisasi AI Modal ===== */}
+      {isKostumiModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-neutral-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center">
+                  <Brain size={18} />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-white">Kostumisasi AI</h2>
+                  <p className="text-xs text-neutral-500">Kelola knowledge base Arise</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsKostumiModal(false)}
+                className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-neutral-800 shrink-0 px-5 pt-3">
+              <button
+                onClick={() => setKostumiTab('upload')}
+                className={`flex items-center gap-2 pb-3 px-1 mr-6 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
+                  kostumiTab === 'upload'
+                    ? 'border-blue-500 text-blue-400'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                <Upload size={14} />
+                Upload Dokumen
+              </button>
+              <button
+                onClick={() => { setKostumiTab('chunks'); loadChunks(); }}
+                className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
+                  kostumiTab === 'chunks'
+                    ? 'border-blue-500 text-blue-400'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                <FileText size={14} />
+                Kelola Chunks
+                {chunks.length > 0 && (
+                  <span className="bg-neutral-700 text-neutral-300 text-xs px-1.5 py-0.5 rounded-full">{chunks.length}</span>
+                )}
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-5">
+
+              {/* === Tab Upload === */}
+              {kostumiTab === 'upload' && (
+                <div className="space-y-4">
+                  <p className="text-sm text-neutral-400">
+                    Upload file teks atau tempel konten dokumen secara langsung. Sistem akan otomatis memotong teks menjadi chunk dan mengindeks ke knowledge base AI.
+                  </p>
+
+                  {/* File Upload Zone */}
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-neutral-700 hover:border-blue-500/60 rounded-xl p-6 text-center cursor-pointer transition-colors group"
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".txt,.md,.pdf"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+                    <Upload size={24} className="mx-auto mb-2 text-neutral-600 group-hover:text-blue-400 transition-colors" />
+                    {uploadFile ? (
+                      <p className="text-sm font-medium">
+                        <span className={uploadFile.name.endsWith('.pdf') ? 'text-red-300' : 'text-blue-300'}>
+                          {uploadFile.name}
+                        </span>
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-sm text-neutral-400">Klik untuk memilih file <span className="text-blue-400">.txt</span>, <span className="text-blue-400">.md</span>, atau <span className="text-red-400">.pdf</span></p>
+                        <p className="text-xs text-neutral-600 mt-1">Atau tempel teks langsung di bawah ini</p>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Text Area */}
+                  <textarea
+                    value={uploadText}
+                    onChange={(e) => { setUploadText(e.target.value); setUploadFile(null); }}
+                    placeholder="Atau tempel konten dokumen Anda di sini..."
+                    rows={8}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-blue-500/60 resize-none transition-colors"
+                  />
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-600">
+                      {uploadFile
+                        ? uploadFile.name.endsWith('.pdf')
+                          ? `PDF siap dikirim (${(uploadFile.size / 1024).toFixed(1)} KB)`
+                          : `${uploadText.trim().split(/\s+/).filter(Boolean).length} kata`
+                        : `${uploadText.trim().split(/\s+/).filter(Boolean).length} kata`
+                      }
+                    </span>
+                    <button
+                      onClick={handleIngest}
+                      disabled={isIngesting || !uploadText.trim()}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                    >
+                      {isIngesting ? (
+                        <><Loader2 size={14} className="animate-spin" /> Memproses...</>
+                      ) : (
+                        <><Upload size={14} /> Indeks ke Knowledge Base</>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Result Badge */}
+                  {ingestResult && (
+                    <div className={`rounded-xl px-4 py-3 text-sm font-medium ${
+                      ingestResult.startsWith('✅')
+                        ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                        : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                    }`}>
+                      {ingestResult}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* === Tab Chunks === */}
+              {kostumiTab === 'chunks' && (
+                <div className="space-y-3">
+                  {isLoadingChunks ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 size={24} className="animate-spin text-blue-400" />
+                    </div>
+                  ) : chunks.length === 0 ? (
+                    <div className="text-center py-12">
+                      <FileText size={36} className="mx-auto mb-3 text-neutral-700" />
+                      <p className="text-neutral-500 text-sm">Belum ada dokumen dalam knowledge base.</p>
+                      <p className="text-neutral-600 text-xs mt-1">Upload dokumen di tab sebelumnya.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-neutral-500 mb-3">{chunks.length} chunk tersimpan dalam knowledge base</p>
+                      {chunks.map((chunk) => (
+                        <div key={chunk.id} className="border border-neutral-800 rounded-xl overflow-hidden">
+                          <div className="flex items-center justify-between px-4 py-3 bg-neutral-950/60">
+                            <button
+                              onClick={() => setExpandedChunkId(expandedChunkId === chunk.id ? null : chunk.id)}
+                              className="flex items-center gap-2 flex-1 text-left text-sm text-neutral-300 hover:text-white transition-colors cursor-pointer truncate"
+                            >
+                              <ChevronDown
+                                size={14}
+                                className={`shrink-0 text-neutral-500 transition-transform ${expandedChunkId === chunk.id ? 'rotate-180' : ''}`}
+                              />
+                              <span className="truncate">{chunk.content.slice(0, 80)}...</span>
+                            </button>
+                            <button
+                              onClick={() => handleDeleteChunk(chunk.id)}
+                              disabled={deletingChunkId === chunk.id}
+                              className="ml-3 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                              title="Hapus chunk"
+                            >
+                              {deletingChunkId === chunk.id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
+                            </button>
+                          </div>
+                          {expandedChunkId === chunk.id && (
+                            <div className="px-4 py-3 bg-neutral-950 border-t border-neutral-800">
+                              <p className="text-xs text-neutral-400 leading-relaxed whitespace-pre-wrap">{chunk.content}</p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+
             </div>
           </div>
         </div>
