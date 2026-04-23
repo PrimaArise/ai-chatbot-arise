@@ -1,11 +1,13 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
 }
 
 model Chat {
@@ -32,4 +34,11 @@ model User {
   password  String
   createdAt DateTime @default(now())
   chats     Chat[]
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  content   String
+  embedding Unsupported("vector(768)")?
+  createdAt DateTime @default(now())
 }

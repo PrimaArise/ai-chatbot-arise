@@ -14,7 +14,7 @@ async function authenticateUser() {
 }
 
 // ================= GET =================
-export async function GET(req: Request) {
+export async function GET() {
     try {
         const user = await authenticateUser();
 
