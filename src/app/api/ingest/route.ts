@@ -1,80 +1,199 @@
 import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+// ============================================================
+// CONFIG
+// ============================================================
+const MAX_TOKENS = 400;
+const OVERLAP_TOKENS = 80;
 
-/**
- * Membagi teks panjang menjadi chunks kecil (~400 kata per chunk).
- * Overlap 50 kata antar chunk agar konteks tidak hilang di batas potongan.
- */
-function chunkText(text: string, chunkSize = 400, overlapSize = 50): string[] {
+// ============================================================
+// TOKEN COUNTER
+// Estimasi token: 1 token ≈ 4 karakter (pendekatan umum untuk bahasa Inggris/Indonesia)
+// ============================================================
+function countTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+}
+
+// ============================================================
+// INTERFACE
+// ============================================================
+interface ChunkResult {
+    text: string;    // Isi chunk (termasuk judul section)
+    section: string; // Judul section asal
+    source: string;  // Nama file asal
+}
+
+// ============================================================
+// STEP 1: SPLIT BERDASARKAN SECTION
+// Mengenali heading Markdown (##, ###) dan penomoran (1., 2., dst.)
+// ============================================================
+function splitBySection(text: string): { title: string; content: string }[] {
+    // Regex: pisahkan di awal baris yang dimulai heading/nomor
+    const parts = text.split(/\n(?=#{1,3}\s|\d+\.\s)/);
+
+    return parts
+        .map(part => {
+            const trimmed = part.trim();
+            if (!trimmed) return null;
+
+            const lines = trimmed.split('\n');
+            const firstLine = lines[0].trim();
+
+            // Cek apakah baris pertama adalah heading/nomor
+            const isHeading = /^#{1,3}\s/.test(firstLine) || /^\d+\.\s/.test(firstLine);
+            const title = isHeading
+                ? firstLine.replace(/^#+\s*/, '').replace(/^\d+\.\s*/, '').trim()
+                : '';
+
+            return { title, content: trimmed };
+        })
+        .filter((s): s is { title: string; content: string } => s !== null && s.content.length > 0);
+}
+
+// ============================================================
+// STEP 2: SPLIT BERDASARKAN TOKEN (fallback untuk section besar)
+// Menggunakan sliding window dengan overlap
+// ============================================================
+function splitByTokens(text: string, sectionTitle: string): string[] {
     const words = text.split(/\s+/);
     const chunks: string[] = [];
+    let current: string[] = [];
 
-    for (let i = 0; i < words.length; i += chunkSize - overlapSize) {
-        const chunk = words.slice(i, i + chunkSize).join(' ');
-        if (chunk.trim().length > 0) {
-            chunks.push(chunk.trim());
+    // Prefix judul di setiap sub-chunk agar embedding tetap aware terhadap konteks
+    const titlePrefix = sectionTitle ? `[${sectionTitle}]\n` : '';
+
+    for (const word of words) {
+        current.push(word);
+        const currentText = titlePrefix + current.join(' ');
+
+        if (countTokens(currentText) >= MAX_TOKENS) {
+            chunks.push(currentText.trim());
+
+            // Hitung berapa kata yang perlu dipertahankan sebagai overlap
+            const overlapCharTarget = OVERLAP_TOKENS * 4;
+            let overlapWords: string[] = [];
+            let overlapChars = 0;
+
+            for (let i = current.length - 1; i >= 0; i--) {
+                overlapChars += current[i].length + 1;
+                overlapWords.unshift(current[i]);
+                if (overlapChars >= overlapCharTarget) break;
+            }
+
+            current = overlapWords;
         }
-        if (i + chunkSize >= words.length) break;
+    }
+
+    // Simpan sisa kata yang belum masuk chunk
+    if (current.length > 0) {
+        const remaining = (titlePrefix + current.join(' ')).trim();
+        if (remaining.length > 0) chunks.push(remaining);
     }
 
     return chunks;
 }
 
-/**
- * Menghasilkan embedding vektor dari teks menggunakan Gemini text-embedding-004.
- * Mengembalikan array float 768-dimensi.
- */
-async function generateEmbedding(text: string): Promise<number[]> {
-    const model = genAI.getGenerativeModel({ model: 'text-embedding-004' });
-    const result = await model.embedContent(text);
-    return result.embedding.values;
+// ============================================================
+// MAIN CHUNKER
+// Pipeline: Load → Split Section → Token Split (jika perlu) → Output + Metadata
+// ============================================================
+function chunkDocument(text: string, source: string = 'unknown'): ChunkResult[] {
+    const finalChunks: ChunkResult[] = [];
+    const sections = splitBySection(text);
+
+    for (const section of sections) {
+        const { title, content } = section;
+        // Tambahkan judul section ke dalam teks yang di-embed agar relevansi lebih akurat
+        const contentWithTitle = title ? `[${title}]\n${content}` : content;
+
+        if (countTokens(contentWithTitle) <= MAX_TOKENS) {
+            // Section cukup kecil → simpan langsung sebagai 1 chunk
+            finalChunks.push({
+                text: contentWithTitle,
+                section: title,
+                source,
+            });
+        } else {
+            // Section terlalu besar → pecah lagi berdasarkan token dengan overlap
+            const subChunks = splitByTokens(content, title);
+            for (const chunk of subChunks) {
+                finalChunks.push({
+                    text: chunk,
+                    section: title,
+                    source,
+                });
+            }
+        }
+    }
+
+    // Fallback: jika tidak ada section terdeteksi, chunk seluruh teks by token
+    if (finalChunks.length === 0 && text.trim().length > 0) {
+        const fallbackChunks = splitByTokens(text.trim(), '');
+        for (const chunk of fallbackChunks) {
+            finalChunks.push({ text: chunk, section: '', source });
+        }
+    }
+
+    return finalChunks;
 }
 
-/**
- * Menyimpan chunks teks ke database pgvector setelah di-embed via Gemini.
- */
-async function ingestChunks(content: string): Promise<string[]> {
-    const chunks = chunkText(content);
-    console.log(`[Ingest] Memproses ${chunks.length} chunk...`);
+// ============================================================
+// EMBEDDING via Gemini gemini-embedding-2 (3072 dimensi)
+// ============================================================
+async function generateEmbedding(text: string): Promise<number[]> {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const response = await ai.models.embedContent({
+        model: 'gemini-embedding-2',
+        contents: text,
+    });
+    const values = response.embeddings?.[0]?.values;
+    if (!values) throw new Error('[Embedding] Respons embedding kosong dari Gemini.');
+    return values;
+}
 
-    const insertedPreviews: string[] = [];
+// ============================================================
+// INGEST PIPELINE
+// ============================================================
+async function ingestDocument(rawText: string, source: string): Promise<ChunkResult[]> {
+    const chunks = chunkDocument(rawText, source);
+    console.log(`[Ingest] "${source}" → ${chunks.length} chunk terdeteksi.`);
 
     for (const chunk of chunks) {
-        const embedding = await generateEmbedding(chunk);
+        console.log(`  [Chunk] section="${chunk.section}" | tokens≈${countTokens(chunk.text)} | preview: ${chunk.text.substring(0, 60)}...`);
+        const embedding = await generateEmbedding(chunk.text);
         const vectorString = `[${embedding.join(',')}]`;
 
         await prisma.$executeRaw`
             INSERT INTO "Document" (id, content, embedding, "createdAt")
             VALUES (
                 gen_random_uuid()::text,
-                ${chunk},
-                ${vectorString}::vector,
+                ${chunk.text},
+                ${vectorString}::vector(3072),
                 NOW()
             )
         `;
-
-        insertedPreviews.push(chunk.substring(0, 60) + '...');
     }
 
-    return insertedPreviews;
+    return chunks;
 }
 
-// ================= POST /api/ingest =================
+// ============================================================
+// POST /api/ingest
 // Menerima:
-//   - application/json : { content: string }  → teks langsung
-//   - multipart/form-data : file (.txt, .md, .pdf) → diekstrak teksnya dulu
+//   - multipart/form-data : file (.txt, .md, .pdf)
+//   - application/json    : { content: string, source?: string }
+// ============================================================
 export async function POST(req: Request) {
     try {
         const contentType = req.headers.get('content-type') || '';
         let rawText = '';
+        let source = 'manual-input';
 
         if (contentType.includes('multipart/form-data')) {
-            // ── File upload mode ──────────────────────────────────────────
             const formData = await req.formData();
             const file = formData.get('file') as File | null;
 
@@ -82,12 +201,12 @@ export async function POST(req: Request) {
                 return NextResponse.json({ error: 'Tidak ada file yang dikirim.' }, { status: 400 });
             }
 
+            source = file.name;
             const fileName = file.name.toLowerCase();
             const arrayBuffer = await file.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
 
             if (fileName.endsWith('.pdf')) {
-                // Ekstrak teks dari PDF
                 const pdfData = await pdfParse(buffer);
                 rawText = pdfData.text;
             } else if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
@@ -99,9 +218,9 @@ export async function POST(req: Request) {
                 );
             }
         } else {
-            // ── JSON mode (plain text) ────────────────────────────────────
             const body = await req.json();
             rawText = body.content || '';
+            source = body.source || 'manual-input';
         }
 
         if (!rawText.trim()) {
@@ -111,12 +230,16 @@ export async function POST(req: Request) {
             );
         }
 
-        const insertedPreviews = await ingestChunks(rawText);
+        const chunks = await ingestDocument(rawText, source);
 
         return NextResponse.json({
             success: true,
-            message: `Berhasil mengindeks ${insertedPreviews.length} chunk ke knowledge base.`,
-            chunks: insertedPreviews,
+            message: `Berhasil mengindeks ${chunks.length} chunk dari "${source}" ke knowledge base.`,
+            chunks: chunks.map(c => ({
+                section: c.section || '(no section)',
+                preview: c.text.substring(0, 80) + '...',
+                tokens: countTokens(c.text),
+            })),
         });
     } catch (error) {
         console.error('[Ingest] Error:', error);

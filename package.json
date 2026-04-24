@@ -12,6 +12,7 @@
   "dependencies": {
     "@ai-sdk/groq": "^1.2.9",
     "@ai-sdk/react": "^1.2.12",
+    "@google/genai": "^1.50.1",
     "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^6.19.2",
     "@supabase/ssr": "^0.10.2",

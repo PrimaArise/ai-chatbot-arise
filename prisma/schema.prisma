@@ -39,6 +39,6 @@ model User {
 model Document {
   id        String   @id @default(cuid())
   content   String
-  embedding Unsupported("vector(768)")?
+  embedding Unsupported("vector(3072)")?
   createdAt DateTime @default(now())
 }
