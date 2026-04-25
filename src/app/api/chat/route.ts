@@ -4,6 +4,7 @@ import { groq } from '@ai-sdk/groq';
 import { streamText, smoothStream, generateText, CoreMessage, createDataStream, JSONValue } from 'ai';
 import { getSupabaseServer } from '@/lib/supabase-server';
 import { GoogleGenAI } from '@google/genai';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 // ============================================================
 // CONFIG
@@ -190,6 +191,16 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
+        // ⏱️ Rate limiting: 20 request per menit per user
+        const rl = checkRateLimit(user.id);
+        if (!rl.allowed) {
+            const seconds = Math.ceil(rl.resetInMs / 1000);
+            return NextResponse.json(
+                { error: `Terlalu banyak permintaan. Coba lagi dalam ${seconds} detik.` },
+                { status: 429, headers: { 'Retry-After': String(seconds) } }
+            );
+        }
+
         const body = await req.json();
         const { chatId, messages: rawMessages } = body;
 
@@ -285,6 +296,7 @@ ATURAN PERILAKU — IKUTI DENGAN TEPAT:
    → JANGAN mencoba menjawab dari pengetahuan umum.
 
 PENTING: Jangan pernah menyebut kata "dokumen", "konteks", atau "referensi" kepada pengguna. Jawab secara natural.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English, ikuti bahasa apapun yang user gunakan.
 
 === KONTEKS PENGETAHUAN ===
 ${ragContext}
@@ -306,14 +318,17 @@ ATURAN PERILAKU:
 3. SEMUA PERTANYAAN LAINNYA:
    → Tidak ditemukan informasi relevan dalam basis pengetahuan.
    → Balas: "Maaf, saya tidak menemukan informasi terkait hal tersebut. Silakan tanyakan sesuatu yang berkaitan dengan topik yang tersedia."
-   → JANGAN menjawab dari pengetahuan umum.`;
+   → JANGAN menjawab dari pengetahuan umum.
+
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.`;
 
         } else {
             // 🔓 MODE STANDBY: KB kosong — belum ada dokumen diupload
             systemPrompt = `Anda adalah AI chatbot bernama Arise.
 Saat ini belum ada dokumen yang dikonfigurasi.
 Untuk pertanyaan apapun, sampaikan: "Sistem saya belum memiliki dokumen yang dikonfigurasi. Silakan hubungi administrator untuk mengatur basis pengetahuan terlebih dahulu."
-Untuk sapaan/small talk, jawab ramah dan jelaskan situasi ini.`;
+Untuk sapaan/small talk, jawab ramah dan jelaskan situasi ini.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.`;
         }
 
         // Buat data stream yang mengirim citations SEBELUM teks AI dimulai,

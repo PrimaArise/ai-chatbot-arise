@@ -157,29 +157,46 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // ============================================================
 // INGEST PIPELINE
 // ============================================================
-async function ingestDocument(rawText: string, source: string, userId: string, isGlobal: boolean): Promise<ChunkResult[]> {
+async function ingestDocument(rawText: string, source: string, userId: string, isGlobal: boolean): Promise<{ chunks: ChunkResult[]; inserted: number; skipped: number }> {
     const chunks = chunkDocument(rawText, source);
     console.log(`[Ingest] "${source}" → ${chunks.length} chunk | userId=${userId} | isGlobal=${isGlobal}`);
+
+    let inserted = 0;
+    let skipped = 0;
 
     for (const chunk of chunks) {
         console.log(`  [Chunk] section="${chunk.section}" | tokens≈${countTokens(chunk.text)} | preview: ${chunk.text.substring(0, 60)}...`);
         const embedding = await generateEmbedding(chunk.text);
         const vectorString = `[${embedding.join(',')}]`;
 
-        await prisma.$executeRaw`
+        // Prevent duplicate chunks: skip jika konten yang SAMA PERSIS sudah ada
+        // untuk userId yang sama (personal) atau sebagai dokumen global
+        const rowsAffected = await prisma.$executeRaw`
             INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", "isGlobal")
-            VALUES (
+            SELECT
                 gen_random_uuid()::text,
                 ${chunk.text},
                 ${vectorString}::vector(3072),
                 NOW(),
                 ${userId},
                 ${isGlobal}
+            WHERE NOT EXISTS (
+                SELECT 1 FROM "Document"
+                WHERE content = ${chunk.text}
+                  AND "userId" = ${userId}
             )
         `;
+
+        if (rowsAffected > 0) {
+            inserted++;
+        } else {
+            skipped++;
+            console.log(`  [Dedup] Chunk duplikat dilewati: "${chunk.text.substring(0, 60)}..."`);
+        }
     }
 
-    return chunks;
+    console.log(`[Ingest] Selesai: ${inserted} chunk diindeks, ${skipped} chunk duplikat dilewati.`);
+    return { chunks, inserted, skipped };
 }
 
 // ============================================================
@@ -208,6 +225,8 @@ export async function POST(req: Request) {
         let rawText = '';
         let source = 'manual-input';
 
+        let isGlobal = false;
+
         if (contentType.includes('multipart/form-data')) {
             const formData = await req.formData();
             const file = formData.get('file') as File | null;
@@ -223,7 +242,6 @@ export async function POST(req: Request) {
 
             if (fileName.endsWith('.pdf')) {
                 try {
-                    // Gunakan lib path langsung — Next.js webpack membungkus CJS module
                     // eslint-disable-next-line @typescript-eslint/no-require-imports
                     const pdfParse = require('pdf-parse/lib/pdf-parse.js') as (
                         buf: Buffer,
@@ -255,32 +273,42 @@ export async function POST(req: Request) {
                     { status: 400 }
                 );
             }
+
+            // isGlobal untuk file upload: baca dari form field (opsional, default false)
+            const isGlobalField = formData.get('isGlobal');
+            isGlobal = isAdmin && isGlobalField === 'true';
+
         } else {
+            // JSON body
             const jsonBody = await req.json() as { content?: string; source?: string; isGlobal?: boolean };
             rawText = jsonBody.content || '';
             source = jsonBody.source || 'manual-input';
-            // isGlobal hanya diizinkan jika user adalah admin
-            const isGlobal = isAdmin && jsonBody.isGlobal === true;
-
-            if (!rawText.trim()) {
-                return NextResponse.json(
-                    { error: 'Konten dokumen kosong atau tidak berhasil diekstrak.' },
-                    { status: 400 }
-                );
-            }
-
-            const chunks = await ingestDocument(rawText, source, userId, isGlobal);
-
-            return NextResponse.json({
-                success: true,
-                message: `Berhasil mengindeks ${chunks.length} chunk dari "${source}" ke knowledge base${isGlobal ? ' (Global)' : ''}.`,
-                chunks: chunks.map(c => ({
-                    section: c.section || '(no section)',
-                    preview: c.text.substring(0, 80) + '...',
-                    tokens: countTokens(c.text),
-                })),
-            });
+            isGlobal = isAdmin && jsonBody.isGlobal === true;
         }
+
+        // ── Proses rawText (berlaku untuk semua path) ──
+        if (!rawText.trim()) {
+            return NextResponse.json(
+                { error: 'Konten dokumen kosong atau tidak berhasil diekstrak.' },
+                { status: 400 }
+            );
+        }
+
+        const result = await ingestDocument(rawText, source, userId, isGlobal);
+
+        const skipMsg = result.skipped > 0 ? ` (${result.skipped} duplikat dilewati)` : '';
+        return NextResponse.json({
+            success: true,
+            message: `Berhasil mengindeks ${result.inserted} chunk dari "${source}" ke knowledge base${isGlobal ? ' (Global)' : ''}${skipMsg}.`,
+            chunks: result.chunks.map(c => ({
+                section: c.section || '(no section)',
+                preview: c.text.substring(0, 80) + '...',
+                tokens: countTokens(c.text),
+            })),
+            inserted: result.inserted,
+            skipped: result.skipped,
+        });
+
     } catch (error) {
         console.error('[Ingest] Error:', error);
         return NextResponse.json(

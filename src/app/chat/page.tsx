@@ -7,7 +7,7 @@ import { useChat } from '@ai-sdk/react';
 import { useEffect, useRef, useState, memo, Suspense, FormEvent, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Shield, User } from 'lucide-react';
+import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Shield, User, Search, Download, RefreshCw, BarChart2 } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
@@ -148,6 +148,7 @@ function ChatComponent() {
   const [editChunkContent, setEditChunkContent] = useState('');
   const [isUpdatingChunk, setIsUpdatingChunk] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const ingestResultRef = useRef<HTMLDivElement>(null);
 
   // ===== Multi-select chunks =====
   const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set());
@@ -165,6 +166,12 @@ function ChatComponent() {
 
   // ===== isGlobal toggle untuk admin saat upload =====
   const [isGlobalUpload, setIsGlobalUpload] = useState(false);
+
+  // ===== Sidebar search =====
+  const [chatSearch, setChatSearch] = useState('');
+
+  // ===== Export state =====
+  const [isExporting, setIsExporting] = useState<string | null>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -194,7 +201,13 @@ function ChatComponent() {
     checkUser();
   }, [router]);
 
-  // Ambil role user setelah auth check
+  // Auto-scroll ke hasil ingest saat muncul
+  useEffect(() => {
+    if (ingestResult && ingestResultRef.current) {
+      ingestResultRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [ingestResult]);
+
   useEffect(() => {
     fetch('/api/me')
       .then(r => r.ok ? r.json() : null)
@@ -241,7 +254,7 @@ function ChatComponent() {
     }
   };
 
-  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, data: streamData } = useChat({
+  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, reload, data: streamData } = useChat({
     body: {
       chatId: ruanganId
     },
@@ -460,10 +473,13 @@ function ChatComponent() {
       try {
         const formData = new FormData();
         formData.append('file', uploadFile);
+        // Admin: kirim isGlobal flag agar server bisa set dokumen sebagai global
+        if (isAdmin) formData.append('isGlobal', String(isGlobalUpload));
         const res = await fetch('/api/ingest', { method: 'POST', body: formData });
         const data = await res.json();
         if (res.ok) {
-          setIngestResult(`✅ Berhasil mengindeks ${data.chunks?.length || 0} chunk ke knowledge base.`);
+          const skipInfo = data.skipped > 0 ? ` (${data.skipped} duplikat dilewati)` : '';
+          setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke knowledge base${isAdmin && isGlobalUpload ? ' (Global 🌐)' : ' (Pribadi 🔒)'}${skipInfo}.`);
           setUploadText('');
           setUploadFile(null);
           if (fileInputRef.current) fileInputRef.current.value = '';
@@ -488,7 +504,8 @@ function ChatComponent() {
 
       const data = await res.json();
       if (res.ok) {
-        setIngestResult(`✅ Berhasil mengindeks ${data.chunks?.length || 0} chunk ke knowledge base.`);
+        const skipInfo2 = data.skipped > 0 ? ` (${data.skipped} duplikat dilewati)` : '';
+        setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke knowledge base${isAdmin && isGlobalUpload ? ' (Global 🌐)' : isAdmin ? ' (Pribadi 🔒)' : ''}${skipInfo2}.`);
         setUploadText('');
         setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -601,7 +618,24 @@ function ChatComponent() {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-1 w-64 pb-16">
-          {chatList.map((chat) => (
+          {/* Search riwayat chat */}
+          <div className="relative mb-2">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600" />
+            <input
+              type="text"
+              placeholder="Cari riwayat..."
+              value={chatSearch}
+              onChange={e => setChatSearch(e.target.value)}
+              className="w-full pl-7 pr-7 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 placeholder-neutral-600 focus:outline-none focus:border-neutral-600 transition-colors"
+            />
+            {chatSearch && (
+              <button onClick={() => setChatSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-600 hover:text-neutral-400 cursor-pointer">
+                <X size={11} />
+              </button>
+            )}
+          </div>
+
+          {(chatSearch ? chatList.filter(c => c.title.toLowerCase().includes(chatSearch.toLowerCase())) : chatList).map((chat) => (
             <div key={chat.id} className="relative group">
               {editingChatId === chat.id ? (
                 <div className={`flex items-center w-full px-2 py-2 rounded-lg text-sm transition-all ${ruanganId === chat.id ? 'bg-neutral-800' : 'bg-neutral-800'}`}>
@@ -651,12 +685,38 @@ function ChatComponent() {
 
                     {/* Dropdown Menu */}
                     {dropdownOpenId === chat.id && (
-                      <div className="absolute right-2 top-10 mt-1 w-36 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl z-50 overflow-hidden">
+                      <div className="absolute right-2 top-10 mt-1 w-40 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl z-50 overflow-hidden">
                         <button
                           onClick={(e) => startEditing(chat, e)}
                           className="w-full text-left px-4 py-2 text-sm text-neutral-200 hover:bg-neutral-700 flex items-center gap-2 cursor-pointer"
                         >
                           <Edit2 size={14} /> Rename
+                        </button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setDropdownOpenId(null);
+                            setIsExporting(chat.id);
+                            try {
+                              let msgs: { role: string; content: string }[] = [];
+                              if (chat.id === ruanganId && messages.length > 0) {
+                                msgs = messages;
+                              } else {
+                                const res = await fetch(`/api/chat?chatId=${chat.id}`);
+                                msgs = await res.json();
+                              }
+                              const lines = [`=== AI Arise — Ekspor Percakapan ===`, `Judul  : ${chat.title}`, `Tanggal: ${new Date().toLocaleDateString('id-ID')}`, ``, ...msgs.map(m => `[${m.role === 'user' ? 'Anda' : 'Arise'}]:\n${m.content}`)];
+                              const blob = new Blob([lines.join('\n\n')], { type: 'text/plain' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url; a.download = `${chat.title.replace(/[^a-z0-9]/gi, '_')}.txt`;
+                              a.click(); URL.revokeObjectURL(url);
+                            } catch { toast.error('Gagal mengekspor chat.'); }
+                            setIsExporting(null);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm text-neutral-200 hover:bg-neutral-700 flex items-center gap-2 cursor-pointer"
+                        >
+                          {isExporting === chat.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export .txt
                         </button>
                         <button
                           onClick={(e) => handleDeleteClick(chat.id, e)}
@@ -747,6 +807,15 @@ function ChatComponent() {
             <span>Kostumisasi AI</span>
           </button>
 
+          {/* Dashboard Link */}
+          <button
+            onClick={() => window.location.href = '/dashboard'}
+            className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-300 py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap cursor-pointer border border-neutral-700"
+          >
+            <BarChart2 size={15} />
+            <span>Dashboard</span>
+          </button>
+
           {/* Logout Button */}
           <button
             onClick={(e) => {
@@ -809,13 +878,30 @@ function ChatComponent() {
                     />
                   );
                 })}
+
+                {/* Typing Indicator — muncul saat AI belum mulai balas */}
+                {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                  <div className="flex justify-start">
+                    <div className="flex items-center gap-1.5 px-4 py-3 bg-neutral-900 border border-neutral-800 rounded-3xl">
+                      <span className="text-xs text-neutral-500 mr-1">Arise</span>
+                      {[0, 1, 2].map(i => (
+                        <div
+                          key={i}
+                          className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce"
+                          style={{ animationDelay: `${i * 150}ms` }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
             </div>
 
             <div className="w-full shrink-0 bg-transparent p-4 pb-6">
-              {isLoading && (
-                <div className="flex justify-center mb-3">
+              <div className="flex justify-center mb-3 gap-2">
+                {isLoading ? (
                   <button
                     onClick={stop}
                     className="flex items-center justify-center gap-2 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 rounded-full text-sm font-medium transition-colors shadow-sm cursor-pointer"
@@ -823,8 +909,16 @@ function ChatComponent() {
                     <Square size={14} className="fill-neutral-400" />
                     Stop Generation
                   </button>
-                </div>
-              )}
+                ) : messages.length > 0 && messages[messages.length - 1].role === 'assistant' && (
+                  <button
+                    onClick={() => reload()}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-neutral-800/60 hover:bg-neutral-700 border border-neutral-700/50 text-neutral-500 hover:text-neutral-300 rounded-full text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    <RefreshCw size={12} />
+                    Regenerate
+                  </button>
+                )}
+              </div>
               <div className="max-w-4xl mx-auto bg-neutral-900 border border-neutral-800 rounded-2xl p-2 shadow-lg">
                 <form onSubmit={(e) => {
                   handleCustomSubmit(e);
@@ -1011,8 +1105,8 @@ function ChatComponent() {
                       }
                     </span>
                     <div className="flex items-center gap-3">
-                      {/* Toggle Global — hanya tampil untuk admin, tidak berlaku untuk file upload */}
-                      {isAdmin && !uploadFile && (
+                      {/* Toggle Global/Pribadi — hanya tampil untuk admin (berlaku untuk file DAN teks) */}
+                      {isAdmin && (
                         <button
                           type="button"
                           onClick={() => setIsGlobalUpload(v => !v)}
@@ -1043,11 +1137,14 @@ function ChatComponent() {
 
                   {/* Result Badge */}
                   {ingestResult && (
-                    <div className={`rounded-xl px-4 py-3 text-sm font-medium ${
-                      ingestResult.startsWith('✅')
-                        ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                        : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                    }`}>
+                    <div
+                      ref={ingestResultRef}
+                      className={`rounded-xl px-4 py-3 text-sm font-medium ${
+                        ingestResult.startsWith('✅')
+                          ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                          : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      }`}
+                    >
                       {ingestResult}
                     </div>
                   )}
@@ -1150,17 +1247,37 @@ function ChatComponent() {
                               </span>
                             )}
                             <button
-                              onClick={() => openEditChunk(chunk)}
-                              className="ml-1 p-1.5 text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors cursor-pointer shrink-0"
-                              title="Edit chunk"
+                              onClick={() => {
+                                if (chunk.isGlobal && !isAdmin) {
+                                  toast.error('Anda bukan admin. Chunk global tidak dapat diedit.');
+                                  return;
+                                }
+                                openEditChunk(chunk);
+                              }}
+                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                                chunk.isGlobal && !isAdmin
+                                  ? 'text-neutral-700 cursor-not-allowed'
+                                  : 'text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10'
+                              }`}
+                              title={chunk.isGlobal && !isAdmin ? 'Hanya admin yang dapat mengedit chunk global' : 'Edit chunk'}
                             >
                               <Edit2 size={14} />
                             </button>
                             <button
-                              onClick={() => handleDeleteChunk(chunk.id)}
+                              onClick={() => {
+                                if (chunk.isGlobal && !isAdmin) {
+                                  toast.error('Anda bukan admin. Chunk global tidak dapat dihapus.');
+                                  return;
+                                }
+                                handleDeleteChunk(chunk.id);
+                              }}
                               disabled={deletingChunkId === chunk.id}
-                              className="ml-1 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50"
-                              title="Hapus chunk"
+                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50 ${
+                                chunk.isGlobal && !isAdmin
+                                  ? 'text-neutral-700 cursor-not-allowed'
+                                  : 'text-neutral-500 hover:text-red-400 hover:bg-red-500/10'
+                              }`}
+                              title={chunk.isGlobal && !isAdmin ? 'Hanya admin yang dapat menghapus chunk global' : 'Hapus chunk'}
                             >
                               {deletingChunkId === chunk.id ? (
                                 <Loader2 size={14} className="animate-spin" />
@@ -1176,6 +1293,30 @@ function ChatComponent() {
                           )}
                         </div>
                       ))}
+
+                      {/* ── Sticky Floating Bar ── muncul saat ada chunk dipilih, user tidak perlu scroll ke atas */}
+                      {selectedChunkIds.size > 0 && (
+                        <div className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 px-4 py-3 bg-neutral-900/95 backdrop-blur border border-red-500/20 rounded-xl shadow-lg z-10">
+                          <span className="text-xs text-neutral-400">
+                            <span className="text-white font-semibold">{selectedChunkIds.size}</span> chunk dipilih
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setSelectedChunkIds(new Set())}
+                              className="px-3 py-1.5 text-xs text-neutral-400 hover:text-white border border-neutral-700 hover:border-neutral-500 rounded-lg transition-colors cursor-pointer"
+                            >
+                              Batal
+                            </button>
+                            <button
+                              onClick={() => setShowBulkDeleteConfirm(true)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer shadow-sm"
+                            >
+                              <Trash2 size={12} />
+                              Hapus {selectedChunkIds.size} Terpilih
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
