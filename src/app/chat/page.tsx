@@ -1,13 +1,13 @@
 'use client';
 
 import { nanoid } from 'nanoid';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useChat } from '@ai-sdk/react';
-import { useEffect, useRef, useState, memo, Suspense, FormEvent } from 'react';
+import { useEffect, useRef, useState, memo, Suspense, FormEvent, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Brain, Upload, FileText, Loader2, ChevronDown } from 'lucide-react';
+import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Shield, User } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
@@ -16,6 +16,7 @@ import toast, { Toaster } from 'react-hot-toast';
 // Types for react-markdown component props
 type PreProps = React.HTMLAttributes<HTMLPreElement> & { node?: unknown };
 type ChatMsg = { id?: string; role: string; content: string };
+type ChunkCitation = { index: number; snippet: string; distance: number };
 
 const extractText = (node: unknown): string => {
   if (typeof node === 'string') return node;
@@ -25,7 +26,8 @@ const extractText = (node: unknown): string => {
   return '';
 };
 
-const ChatMessage = memo(function ChatMessage({ m }: { m: ChatMsg }) {
+const ChatMessage = memo(function ChatMessage({ m, citations }: { m: ChatMsg; citations?: ChunkCitation[] }) {
+  const [showCitations, setShowCitations] = useState(false);
   return (
     <div className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -72,13 +74,47 @@ const ChatMessage = memo(function ChatMessage({ m }: { m: ChatMsg }) {
             >
               {m.content}
             </ReactMarkdown>
+
+            {/* Citation card — hanya tampil untuk pesan AI yang punya referensi */}
+            {citations && citations.length > 0 && (
+              <div className="mt-3 border border-neutral-800 rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setShowCitations(v => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-neutral-900 hover:bg-neutral-800 transition-colors text-xs text-neutral-400 cursor-pointer"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <BookOpen size={12} className="text-blue-400" />
+                    <span className="font-medium text-neutral-300">Sumber Referensi</span>
+                    <span className="bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full text-[10px] font-semibold">{citations.length}</span>
+                  </div>
+                  <ChevronDown size={12} className={`transition-transform duration-200 ${showCitations ? 'rotate-180' : ''}`} />
+                </button>
+                {showCitations && (
+                  <div className="divide-y divide-neutral-800">
+                    {citations.map((c) => (
+                      <div key={c.index} className="px-3 py-2.5 bg-neutral-950">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                            #{c.index}
+                          </span>
+                          <span className="text-[10px] text-neutral-600">relevansi {Math.round((1 - c.distance) * 100)}%</span>
+                        </div>
+                        <p className="text-xs text-neutral-400 leading-relaxed line-clamp-3">{c.snippet}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
     </div>
   );
 }, (prevProps, nextProps) => {
-  return prevProps.m.content === nextProps.m.content && prevProps.m.role === nextProps.m.role;
+  return prevProps.m.content === nextProps.m.content &&
+         prevProps.m.role === nextProps.m.role &&
+         prevProps.citations === nextProps.citations;
 });
 
 
@@ -104,11 +140,31 @@ function ChatComponent() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isIngesting, setIsIngesting] = useState(false);
   const [ingestResult, setIngestResult] = useState<string | null>(null);
-  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string }[]>([]);
+  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; isGlobal: boolean; userId: string }[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
   const [deletingChunkId, setDeletingChunkId] = useState<string | null>(null);
   const [expandedChunkId, setExpandedChunkId] = useState<string | null>(null);
+  const [editingChunkId, setEditingChunkId] = useState<string | null>(null);
+  const [editChunkContent, setEditChunkContent] = useState('');
+  const [isUpdatingChunk, setIsUpdatingChunk] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ===== Multi-select chunks =====
+  const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+
+  // ===== User role (admin/user) =====
+  const [userRole, setUserRole] = useState<'admin' | 'user'>('user');
+  const isAdmin = userRole === 'admin';
+
+  // ===== Role change modal =====
+  const [showRoleModal, setShowRoleModal] = useState(false);
+  const [roleVerifyEmail, setRoleVerifyEmail] = useState('');
+  const [isChangingRole, setIsChangingRole] = useState(false);
+
+  // ===== isGlobal toggle untuk admin saat upload =====
+  const [isGlobalUpload, setIsGlobalUpload] = useState(false);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -138,7 +194,54 @@ function ChatComponent() {
     checkUser();
   }, [router]);
 
-  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading } = useChat({
+  // Ambil role user setelah auth check
+  useEffect(() => {
+    fetch('/api/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.role === 'admin') setUserRole('admin'); })
+      .catch(() => {});
+  }, []);
+
+  const handleRoleChange = async (targetRole: 'admin' | 'user') => {
+    if (targetRole === 'admin') {
+      const verifyEmail = roleVerifyEmail.trim();
+      if (!verifyEmail) { return; }
+      setIsChangingRole(true);
+      const res = await fetch('/api/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetRole: 'admin', verifyEmail }),
+      });
+      const result = await res.json();
+      setIsChangingRole(false);
+      if (res.ok) {
+        setUserRole('admin');
+        setShowRoleModal(false);
+        setRoleVerifyEmail('');
+        toast.success('Role berhasil diubah menjadi Admin!');
+      } else {
+        toast.error(result.error || 'Verifikasi gagal.');
+      }
+    } else {
+      setIsChangingRole(true);
+      const res = await fetch('/api/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetRole: 'user' }),
+      });
+      const result = await res.json();
+      setIsChangingRole(false);
+      if (res.ok) {
+        setUserRole('user');
+        setShowRoleModal(false);
+        toast.success('Role berhasil diubah menjadi User.');
+      } else {
+        toast.error(result.error || 'Gagal mengubah role.');
+      }
+    }
+  };
+
+  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, data: streamData } = useChat({
     body: {
       chatId: ruanganId
     },
@@ -146,6 +249,23 @@ function ChatComponent() {
       toast.error('Gagal terhubung ke AI. Silakan coba lagi.', { id: 'ai-error' });
     }
   });
+
+
+  // Derive citations langsung dari streamData tanpa useState/useEffect
+  // Ini menghindari cascading renders dan mematuhi react-hooks/set-state-in-effect rule
+  const lastCitations = useMemo<ChunkCitation[]>(() => {
+    if (!streamData || streamData.length === 0) return [];
+    for (let i = streamData.length - 1; i >= 0; i--) {
+      const item = streamData[i] as { type?: string; citations?: ChunkCitation[] };
+      if (item?.type === 'rag_citations' && Array.isArray(item.citations)) {
+        return item.citations;
+      }
+    }
+    return [];
+  // ruanganId disertakan agar citations reset otomatis saat pindah sesi
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamData, ruanganId]);
+
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isFirstLoad = useRef(true);
@@ -363,8 +483,9 @@ function ChatComponent() {
       const res = await fetch('/api/ingest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: uploadText }),
+        body: JSON.stringify({ content: uploadText, isGlobal: isAdmin && isGlobalUpload }),
       });
+
       const data = await res.json();
       if (res.ok) {
         setIngestResult(`✅ Berhasil mengindeks ${data.chunks?.length || 0} chunk ke knowledge base.`);
@@ -384,9 +505,78 @@ function ChatComponent() {
     try {
       await fetch(`/api/documents?id=${id}`, { method: 'DELETE' });
       setChunks(prev => prev.filter(c => c.id !== id));
+      setSelectedChunkIds(prev => { const n = new Set(prev); n.delete(id); return n; });
       toast.success('Chunk berhasil dihapus');
     } catch { toast.error('Gagal menghapus chunk'); }
     setDeletingChunkId(null);
+  };
+
+  const toggleSelectChunk = (id: string) => {
+    setSelectedChunkIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedChunkIds.size === chunks.length) {
+      setSelectedChunkIds(new Set());
+    } else {
+      setSelectedChunkIds(new Set(chunks.map(c => c.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedChunkIds.size === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      const ids = Array.from(selectedChunkIds);
+      const res = await fetch('/api/documents', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (res.ok) {
+        setChunks(prev => prev.filter(c => !selectedChunkIds.has(c.id)));
+        setSelectedChunkIds(new Set());
+        toast.success(`${ids.length} chunk berhasil dihapus`);
+      } else {
+        const data = await res.json();
+        toast.error(data.error || 'Gagal menghapus chunk');
+      }
+    } catch { toast.error('Gagal menghapus chunk'); }
+    setIsBulkDeleting(false);
+    setShowBulkDeleteConfirm(false);
+  };
+
+  const openEditChunk = (chunk: { id: string; content: string }) => {
+    setEditingChunkId(chunk.id);
+    setEditChunkContent(chunk.content);
+    setExpandedChunkId(null);
+  };
+
+  const handleUpdateChunk = async () => {
+    if (!editingChunkId || !editChunkContent.trim()) return;
+    setIsUpdatingChunk(true);
+    try {
+      const res = await fetch(`/api/documents?id=${editingChunkId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editChunkContent.trim() }),
+      });
+      if (res.ok) {
+        setChunks(prev => prev.map(c =>
+          c.id === editingChunkId ? { ...c, content: editChunkContent.trim() } : c
+        ));
+        toast.success('Chunk berhasil diperbarui!');
+        setEditingChunkId(null);
+      } else {
+        const data = await res.json();
+        toast.error(data.error || 'Gagal memperbarui chunk');
+      }
+    } catch { toast.error('Gagal memperbarui chunk'); }
+    setIsUpdatingChunk(false);
   };
 
   const isChatEmpty = !ruanganId || messages.length === 0;
@@ -484,12 +674,76 @@ function ChatComponent() {
         </div>
 
         <div className="p-4 border-t border-neutral-800 shrink-0 w-64 absolute bottom-0 bg-neutral-900 z-10 space-y-2">
+          {/* Role Badge — klik untuk ubah role */}
+          <button
+            onClick={() => { setShowRoleModal(v => !v); setRoleVerifyEmail(''); }}
+            className={`w-full flex items-center gap-2 py-2 px-3 rounded-xl border transition-all cursor-pointer ${
+              isAdmin
+                ? 'bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'
+                : 'bg-neutral-800/60 border-neutral-700 hover:bg-neutral-800'
+            }`}
+          >
+            <span className={`text-xs font-medium ${isAdmin ? 'text-amber-500' : 'text-neutral-500'}`}>Role :</span>
+            {isAdmin
+              ? <Shield size={13} className="text-amber-400" />
+              : <User size={13} className="text-neutral-400" />
+            }
+            <span className={`text-xs font-bold tracking-wider uppercase ${isAdmin ? 'text-amber-400' : 'text-neutral-400'}`}>
+              {isAdmin ? 'Admin' : 'User'}
+            </span>
+            <ChevronDown size={11} className={`ml-auto transition-transform ${showRoleModal ? 'rotate-180' : ''} ${isAdmin ? 'text-amber-500/60' : 'text-neutral-600'}`} />
+          </button>
+
+          {/* Role Change Panel */}
+          {showRoleModal && (
+            <div className={`rounded-xl border p-3 space-y-2.5 ${isAdmin ? 'bg-neutral-950 border-amber-500/20' : 'bg-neutral-950 border-neutral-700'}`}>
+              {isAdmin ? (
+                // Admin → demote ke user (tidak perlu verifikasi)
+                <>
+                  <p className="text-xs text-neutral-400">Ubah role Anda menjadi <span className="text-neutral-200 font-medium">User</span>. Akses admin akan dicabut.</p>
+                  <button
+                    onClick={() => handleRoleChange('user')}
+                    disabled={isChangingRole}
+                    className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-neutral-800 hover:bg-red-500/10 border border-neutral-700 hover:border-red-500/30 text-neutral-300 hover:text-red-300 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isChangingRole
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <User size={12} />}
+                    Demote ke User
+                  </button>
+                </>
+              ) : (
+                // User → promote ke admin (butuh verifikasi email)
+                <>
+                  <p className="text-xs text-neutral-400">Untuk menjadi <span className="text-amber-400 font-medium">Admin</span>, masukkan email verifikasi yang diberikan pengelola sistem.</p>
+                  <input
+                    type="email"
+                    placeholder="Email verifikasi admin..."
+                    value={roleVerifyEmail}
+                    onChange={e => setRoleVerifyEmail(e.target.value)}
+                    className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 focus:border-amber-500/50 rounded-lg text-xs text-neutral-200 placeholder-neutral-600 outline-none transition-colors"
+                  />
+                  <button
+                    onClick={() => handleRoleChange('admin')}
+                    disabled={isChangingRole || !roleVerifyEmail.trim()}
+                    className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isChangingRole
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <Shield size={12} />}
+                    Promote ke Admin
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Kostumisasi AI Button */}
           <button
             onClick={openKostumiModal}
             className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 px-4 rounded-xl font-medium transition-all shadow-sm flex items-center justify-center gap-2 text-sm whitespace-nowrap cursor-pointer border border-blue-500"
           >
-            <Brain size={16} />
+            <Settings size={16} />
             <span>Kostumisasi AI</span>
           </button>
 
@@ -541,9 +795,20 @@ function ChatComponent() {
           <>
             <div className="flex-1 overflow-y-auto w-full">
               <div className="p-4 sm:p-6 w-full max-w-4xl mx-auto space-y-6">
-                {messages.map((m, idx) => (
-                  <ChatMessage key={m.id || idx} m={m} />
-                ))}
+                {messages.map((m, idx) => {
+                  // Citations ditampilkan hanya di pesan assistant paling akhir yang sedang/baru selesai
+                  const isLastAssistant =
+                    m.role === 'assistant' &&
+                    idx === messages.length - 1 &&
+                    lastCitations.length > 0;
+                  return (
+                    <ChatMessage
+                      key={m.id || idx}
+                      m={m}
+                      citations={isLastAssistant ? lastCitations : undefined}
+                    />
+                  );
+                })}
                 <div ref={messagesEndRef} />
               </div>
             </div>
@@ -646,7 +911,7 @@ function ChatComponent() {
             <div className="flex items-center justify-between p-5 border-b border-neutral-800 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center">
-                  <Brain size={18} />
+                  <Settings size={18} />
                 </div>
                 <div>
                   <h2 className="text-base font-semibold text-white">Kostumisasi AI</h2>
@@ -745,17 +1010,35 @@ function ChatComponent() {
                         : `${uploadText.trim().split(/\s+/).filter(Boolean).length} kata`
                       }
                     </span>
-                    <button
-                      onClick={handleIngest}
-                      disabled={isIngesting || !uploadText.trim()}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
-                    >
-                      {isIngesting ? (
-                        <><Loader2 size={14} className="animate-spin" /> Memproses...</>
-                      ) : (
-                        <><Upload size={14} /> Indeks ke Knowledge Base</>
+                    <div className="flex items-center gap-3">
+                      {/* Toggle Global — hanya tampil untuk admin, tidak berlaku untuk file upload */}
+                      {isAdmin && !uploadFile && (
+                        <button
+                          type="button"
+                          onClick={() => setIsGlobalUpload(v => !v)}
+                          className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer ${
+                            isGlobalUpload
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                              : 'bg-neutral-800 border-neutral-700 text-neutral-500 hover:text-neutral-300'
+                          }`}
+                          title={isGlobalUpload ? 'Dokumen akan tersedia untuk semua user' : 'Klik untuk jadikan dokumen global'}
+                        >
+                          <Shield size={11} />
+                          {isGlobalUpload ? 'Global' : 'Pribadi'}
+                        </button>
                       )}
-                    </button>
+                      <button
+                        onClick={handleIngest}
+                        disabled={isIngesting || (!uploadText.trim() && !uploadFile)}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                      >
+                        {isIngesting ? (
+                          <><Loader2 size={14} className="animate-spin" /> Memproses...</>
+                        ) : (
+                          <><Upload size={14} /> Indeks ke Knowledge Base</>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Result Badge */}
@@ -786,13 +1069,69 @@ function ChatComponent() {
                     </div>
                   ) : (
                     <>
-                      <p className="text-xs text-neutral-500 mb-3">{chunks.length} chunk tersimpan dalam knowledge base</p>
+                      {/* Toolbar multi-select */}
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={toggleSelectAll}
+                            className="flex items-center gap-2 text-xs text-neutral-400 hover:text-white transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-neutral-800"
+                          >
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                              selectedChunkIds.size === chunks.length && chunks.length > 0
+                                ? 'bg-blue-600 border-blue-600'
+                                : selectedChunkIds.size > 0
+                                  ? 'bg-blue-600/40 border-blue-500'
+                                  : 'border-neutral-600'
+                            }`}>
+                              {selectedChunkIds.size === chunks.length && chunks.length > 0 ? (
+                                <Check size={10} className="text-white" />
+                              ) : selectedChunkIds.size > 0 ? (
+                                <div className="w-2 h-0.5 bg-white rounded" />
+                              ) : null}
+                            </div>
+                            Pilih Semua
+                          </button>
+                          <span className="text-xs text-neutral-600">{chunks.length} chunk</span>
+                        </div>
+                        {selectedChunkIds.size > 0 && (
+                          <button
+                            onClick={() => setShowBulkDeleteConfirm(true)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 hover:text-red-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                          >
+                            <Trash2 size={12} />
+                            Hapus {selectedChunkIds.size} Terpilih
+                          </button>
+                        )}
+                      </div>
+
                       {chunks.map((chunk) => (
-                        <div key={chunk.id} className="border border-neutral-800 rounded-xl overflow-hidden">
-                          <div className="flex items-center justify-between px-4 py-3 bg-neutral-950/60">
+                        <div
+                          key={chunk.id}
+                          className={`border rounded-xl overflow-hidden transition-colors ${
+                            selectedChunkIds.has(chunk.id)
+                              ? 'border-blue-500/50 bg-blue-500/5'
+                              : 'border-neutral-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between px-3 py-3 bg-neutral-950/60">
+                            {/* Checkbox */}
+                            <button
+                              onClick={() => toggleSelectChunk(chunk.id)}
+                              className="shrink-0 mr-2 cursor-pointer"
+                              title={selectedChunkIds.has(chunk.id) ? 'Batalkan pilihan' : 'Pilih chunk ini'}
+                            >
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                                selectedChunkIds.has(chunk.id)
+                                  ? 'bg-blue-600 border-blue-600'
+                                  : 'border-neutral-600 hover:border-blue-500'
+                              }`}>
+                                {selectedChunkIds.has(chunk.id) && <Check size={10} className="text-white" />}
+                              </div>
+                            </button>
+
                             <button
                               onClick={() => setExpandedChunkId(expandedChunkId === chunk.id ? null : chunk.id)}
-                              className="flex items-center gap-2 flex-1 text-left text-sm text-neutral-300 hover:text-white transition-colors cursor-pointer truncate"
+                              className="flex items-center gap-2 flex-1 text-left text-sm text-neutral-300 hover:text-white transition-colors cursor-pointer min-w-0"
                             >
                               <ChevronDown
                                 size={14}
@@ -800,10 +1139,27 @@ function ChatComponent() {
                               />
                               <span className="truncate">{chunk.content.slice(0, 80)}...</span>
                             </button>
+                            {/* Badge Global/Pribadi */}
+                            {chunk.isGlobal ? (
+                              <span className="ml-1 shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                                GLOBAL
+                              </span>
+                            ) : isAdmin && (
+                              <span className="ml-1 shrink-0 text-[10px] text-neutral-600 bg-neutral-800 px-1.5 py-0.5 rounded">
+                                {chunk.userId === '' ? 'lama' : chunk.userId.slice(-6)}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => openEditChunk(chunk)}
+                              className="ml-1 p-1.5 text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors cursor-pointer shrink-0"
+                              title="Edit chunk"
+                            >
+                              <Edit2 size={14} />
+                            </button>
                             <button
                               onClick={() => handleDeleteChunk(chunk.id)}
                               disabled={deletingChunkId === chunk.id}
-                              className="ml-3 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                              className="ml-1 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50"
                               title="Hapus chunk"
                             >
                               {deletingChunkId === chunk.id ? (
@@ -825,6 +1181,106 @@ function ChatComponent() {
                 </div>
               )}
 
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Bulk Delete Confirm Modal ===== */}
+      {showBulkDeleteConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center mb-4">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">Hapus {selectedChunkIds.size} Chunk?</h3>
+              <p className="text-neutral-400 text-sm mb-6">
+                Tindakan ini tidak dapat dibatalkan. {selectedChunkIds.size} chunk yang dipilih akan dihapus secara permanen dari knowledge base.
+              </p>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={() => setShowBulkDeleteConfirm(false)}
+                  disabled={isBulkDeleting}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-neutral-700 text-neutral-300 hover:bg-neutral-800 font-medium text-sm transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isBulkDeleting ? (
+                    <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    'Hapus Permanen'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Edit Chunk Modal ===== */}
+      {editingChunkId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-neutral-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center">
+                  <Edit2 size={18} />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-white">Edit Chunk</h2>
+                  <p className="text-xs text-neutral-500">Embedding akan di-regenerasi otomatis setelah disimpan</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingChunkId(null)}
+                disabled={isUpdatingChunk}
+                className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Textarea */}
+            <div className="flex-1 overflow-y-auto p-5">
+              <textarea
+                value={editChunkContent}
+                onChange={(e) => setEditChunkContent(e.target.value)}
+                rows={14}
+                className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-blue-500/60 resize-none transition-colors font-mono leading-relaxed"
+                placeholder="Konten chunk..."
+              />
+              <p className="text-xs text-neutral-600 mt-2 text-right">
+                {editChunkContent.trim().split(/\s+/).filter(Boolean).length} kata · ≈{Math.ceil(editChunkContent.length / 4)} token
+              </p>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex gap-3 p-5 border-t border-neutral-800 shrink-0">
+              <button
+                onClick={() => setEditingChunkId(null)}
+                disabled={isUpdatingChunk}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-neutral-700 text-neutral-300 hover:bg-neutral-800 font-medium text-sm transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleUpdateChunk}
+                disabled={isUpdatingChunk || !editChunkContent.trim()}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                {isUpdatingChunk ? (
+                  <><Loader2 size={14} className="animate-spin" /> Menyimpan & Re-embed...</>
+                ) : (
+                  <><Check size={14} /> Simpan Perubahan</>
+                )}
+              </button>
             </div>
           </div>
         </div>

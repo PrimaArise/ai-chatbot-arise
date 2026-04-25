@@ -1,53 +1,148 @@
 import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 import { groq } from '@ai-sdk/groq';
-import { streamText, smoothStream, generateText } from 'ai';
+import { streamText, smoothStream, generateText, CoreMessage, createDataStream, JSONValue } from 'ai';
 import { getSupabaseServer } from '@/lib/supabase-server';
 import { GoogleGenAI } from '@google/genai';
+
+// ============================================================
+// CONFIG
+// ============================================================
+
 /**
- * Mengecek apakah ada dokumen yang sudah diindeks di knowledge base.
- * Digunakan untuk menentukan apakah AI harus berjalan dalam strict RAG mode.
+ * Jumlah maksimum pesan yang dikirim ke LLM.
+ * Pesan lebih lama dipotong untuk mencegah token bloat.
+ * Selalu pertahankan pesan pertama (konteks awal) + N pesan terakhir.
  */
-async function hasKnowledgeBase(): Promise<boolean> {
-    const count = await prisma.$queryRaw<{ count: bigint }[]>`SELECT COUNT(*) as count FROM "Document"`;
+const MAX_HISTORY_MESSAGES = 10;
+
+/**
+ * Threshold cosine distance untuk RAG retrieval.
+ * Nilai lebih kecil = lebih ketat (hanya chunk yang sangat mirip).
+ * Range: 0.0 (identik) → 2.0 (berlawanan). Praktis: < 0.42 = relevan.
+ */
+const RAG_DISTANCE_THRESHOLD = 0.42;
+
+/**
+ * Jumlah chunk RAG yang diambil (top-k).
+ */
+const RAG_TOP_K = 5;
+
+/**
+ * Jumlah pesan user terakhir yang digabung sebagai query RAG.
+ * Membantu ketika pertanyaan singkat tapi konteks ada di pesan sebelumnya.
+ */
+const RAG_QUERY_WINDOW = 3;
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+/**
+ * Mengecek apakah user ini punya akses ke knowledge base:
+ * dokumen milik sendiri ATAU dokumen global yang di-upload admin.
+ */
+async function hasKnowledgeBase(userId: string): Promise<boolean> {
+    const count = await prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*) as count FROM "Document"
+        WHERE "userId" = ${userId} OR "isGlobal" = true
+    `;
     return Number(count[0]?.count ?? 0) > 0;
 }
 
 /**
- * Mengubah teks pertanyaan menjadi embedding vektor via Gemini,
- * lalu mencari top-k dokumen yang paling mirip di pgvector Supabase.
- * Hanya mengembalikan hasil dengan similarity score yang cukup relevan (distance < 0.5).
+ * Memotong array messages agar tidak melebihi MAX_HISTORY_MESSAGES.
+ * Strategi: ambil pesan pertama (biasanya konteks awal) + N pesan terakhir.
+ * Ini mencegah token bloat saat percakapan panjang.
  */
-async function retrieveRelevantContext(query: string, topK = 5): Promise<string> {
+function trimMessages(messages: CoreMessage[]): CoreMessage[] {
+    if (messages.length <= MAX_HISTORY_MESSAGES) return messages;
+
+    // Selalu sertakan pesan pertama agar konteks awal tidak hilang
+    const first = messages[0];
+    const recent = messages.slice(-(MAX_HISTORY_MESSAGES - 1));
+
+    // Hindari duplikat jika pesan pertama sudah masuk di recent
+    if (recent[0]?.content === first.content && recent[0]?.role === first.role) {
+        return recent;
+    }
+
+    console.log(`[Chat] Token bloat guard: ${messages.length} → ${MAX_HISTORY_MESSAGES} messages (trimmed ${messages.length - MAX_HISTORY_MESSAGES} lama)`);
+    return [first, ...recent];
+}
+
+/**
+ * Metadata tiap chunk yang dikembalikan ke frontend untuk ditampilkan sebagai citation.
+ * Index signature diperlukan agar tipe ini kompatibel dengan JSONValue (untuk writeData).
+ */
+interface ChunkCitation {
+    index: number;
+    snippet: string;
+    distance: number;
+    [key: string]: unknown;
+}
+
+/**
+ * Mengubah teks pertanyaan menjadi embedding vektor via Gemini,
+ * lalu mencari top-k dokumen milik user yang paling mirip di pgvector Supabase.
+ *
+ * @returns { context, citations } — teks konteks untuk system prompt + metadata chunk untuk UI
+ */
+async function retrieveRelevantContext(
+    messages: { role: string; content: string }[],
+    userId: string
+): Promise<{ context: string; citations: ChunkCitation[] }> {
     try {
+        // Ambil RAG_QUERY_WINDOW pesan user terakhir sebagai query embedding
+        const recentUserMessages = messages
+            .filter(m => m.role === 'user')
+            .slice(-RAG_QUERY_WINDOW)
+            .map(m => m.content)
+            .join('\n');
+
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
         const embResponse = await ai.models.embedContent({
             model: 'gemini-embedding-2',
-            contents: query,
+            contents: recentUserMessages,
         });
         const embedding: number[] = embResponse.embeddings?.[0]?.values ?? [];
         if (embedding.length === 0) throw new Error('Embedding kosong');
         const vectorString = `[${embedding.join(',')}]`;
 
-        // Cosine similarity search dengan threshold distance < 0.5
+        // RAG Pattern 3: cari di dokumen pribadi user + semua dokumen global (admin)
         const docs = await prisma.$queryRaw<{ content: string; distance: number }[]>`
             SELECT content, (embedding <=> ${vectorString}::vector(3072)) AS distance
             FROM "Document"
-            WHERE (embedding <=> ${vectorString}::vector(3072)) < 0.5
+            WHERE ("userId" = ${userId} OR "isGlobal" = true)
+              AND (embedding <=> ${vectorString}::vector(3072)) < ${RAG_DISTANCE_THRESHOLD}
             ORDER BY distance ASC
-            LIMIT ${topK}
+            LIMIT ${RAG_TOP_K}
         `;
 
-        if (!docs || docs.length === 0) return '';
+        if (!docs || docs.length === 0) {
+            console.log(`[RAG] Tidak ada chunk relevan (threshold < ${RAG_DISTANCE_THRESHOLD})`);
+            return { context: '', citations: [] };
+        }
+
+        // Debug log jarak tiap chunk (berguna untuk fine-tuning threshold)
+        console.log(`[RAG] ${docs.length} chunk relevan ditemukan:`);
+        docs.forEach((d, i) => console.log(`  [${i + 1}] distance=${d.distance.toFixed(4)} | ${d.content.substring(0, 60)}...`));
 
         const context = docs
             .map((doc, i) => `[Referensi ${i + 1}]\n${doc.content}`)
             .join('\n\n');
 
-        return context;
+        // Siapkan metadata citation untuk ditampilkan di UI
+        const citations: ChunkCitation[] = docs.map((doc, i) => ({
+            index: i + 1,
+            snippet: doc.content.substring(0, 180).trim() + (doc.content.length > 180 ? '…' : ''),
+            distance: Math.round(doc.distance * 10000) / 10000,
+        }));
+
+        return { context, citations };
     } catch (err) {
         console.error('[RAG] Gagal mengambil konteks:', err);
-        return '';
+        return { context: '', citations: [] };
     }
 }
 
@@ -96,14 +191,17 @@ export async function POST(req: Request) {
         }
 
         const body = await req.json();
-        const { chatId, messages } = body;
+        const { chatId, messages: rawMessages } = body;
 
         if (!chatId) {
             console.error("Missing chatId in request:", body);
             return NextResponse.json({ error: 'Missing chatId' }, { status: 400 });
         }
 
-        const lastUserMessage = messages[messages.length - 1];
+        const lastUserMessage = rawMessages[rawMessages.length - 1];
+
+        // 🔒 Trim history untuk mencegah token bloat sebelum dikirim ke LLM
+        const messages = trimMessages(rawMessages);
 
         // Karena Supabase Auth tidak secara otomatis membuat baris User di schema Prisma (public.User),
         // Kita paksa pendaftaran lazily di sini untuk mencegah error Foreign Key Constraint P2003
@@ -117,7 +215,7 @@ export async function POST(req: Request) {
             }
         });
 
-        const isNewChat = messages.length === 1;
+        const isNewChat = rawMessages.length === 1;
 
         // 🔥 Backend tetap kontrol userId
         await prisma.chat.upsert({
@@ -152,20 +250,19 @@ export async function POST(req: Request) {
         },
     });
 
-        // 🧠 Cek apakah knowledge base sudah berisi dokumen
-        const kbExists = await hasKnowledgeBase();
+        // 🧠 Cek apakah knowledge base user ini sudah berisi dokumen
+        const kbExists = await hasKnowledgeBase(user.id);
 
-        // 🔍 Ambil konteks relevan dari knowledge base via RAG
-        const ragContext = kbExists
-            ? await retrieveRelevantContext(lastUserMessage.content)
-            : '';
+        // 🔍 Ambil konteks relevan dari knowledge base user ini via RAG
+        const { context: ragContext, citations } = kbExists
+            ? await retrieveRelevantContext(rawMessages, user.id)
+            : { context: '', citations: [] };
 
         // 📋 Bangun system prompt dengan 4-behavior logic
         let systemPrompt: string;
 
         if (kbExists && ragContext) {
             // ✅ MODE AKTIF: KB ada + konteks relevan ditemukan
-            // → Handle semua 4 behavior dalam 1 prompt
             systemPrompt = `Anda adalah AI chatbot bernama Arise yang dirancang untuk menjawab pertanyaan berdasarkan dokumen yang tersedia.
 
 ATURAN PERILAKU — IKUTI DENGAN TEPAT:
@@ -195,7 +292,6 @@ ${ragContext}
 
         } else if (kbExists && !ragContext) {
             // ⚠️ MODE AKTIF: KB ada TAPI tidak ada konteks relevan untuk pertanyaan ini
-            // → Handle small talk & meta question, tolak sisanya
             systemPrompt = `Anda adalah AI chatbot bernama Arise yang dirancang untuk menjawab pertanyaan berdasarkan dokumen yang tersedia.
 
 ATURAN PERILAKU:
@@ -220,30 +316,49 @@ Untuk pertanyaan apapun, sampaikan: "Sistem saya belum memiliki dokumen yang dik
 Untuk sapaan/small talk, jawab ramah dan jelaskan situasi ini.`;
         }
 
-        const result = streamText({
-            model: groq('llama-3.3-70b-versatile'),
-            system: systemPrompt,
-            messages,
-            experimental_transform: smoothStream({ delayInMs: 20 }),
-            onFinish: async ({ text }) => {
-                try {
-                    await prisma.message.create({
-                        data: {
-                            chatId,
-                            content: text,
-                            role: 'assistant',
-                        },
-                    });
-                } catch (dbErr) {
-                    console.error("Error saving assistant message:", dbErr);
+        // Buat data stream yang mengirim citations SEBELUM teks AI dimulai,
+        // lalu gabungkan dengan streamText sehingga useChat().data dapat membacanya.
+        const dataStream = createDataStream({
+            execute(writer) {
+                // 📎 Kirim metadata citations ke frontend sebagai data chunk
+                if (citations.length > 0) {
+                    writer.writeData({ type: 'rag_citations', citations } as unknown as JSONValue);
                 }
+
+                const result = streamText({
+                    model: groq('llama-3.3-70b-versatile'),
+                    system: systemPrompt,
+                    messages,
+                    experimental_transform: smoothStream({ delayInMs: 20 }),
+                    onFinish: async ({ text }) => {
+                        try {
+                            await prisma.message.create({
+                                data: {
+                                    chatId,
+                                    content: text,
+                                    role: 'assistant',
+                                },
+                            });
+                        } catch (dbErr) {
+                            console.error("Error saving assistant message:", dbErr);
+                        }
+                    },
+                    onError: (err) => {
+                        console.error("Error groq AI stream:", err);
+                    }
+                });
+
+                result.mergeIntoDataStream(writer, { sendUsage: false });
             },
             onError: (err) => {
-                 console.error("Error groq AI stream:", err);
+                console.error("createDataStream error:", err);
+                return err instanceof Error ? err.message : String(err);
             }
         });
 
-        return result.toDataStreamResponse();
+        return new Response(dataStream, {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        });
     } catch (error) {
         console.error("POST /api/chat error:", error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

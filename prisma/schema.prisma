@@ -32,6 +32,7 @@ model User {
   id        String   @id
   email     String   @unique
   password  String
+  role      String   @default("user")
   createdAt DateTime @default(now())
   chats     Chat[]
 }
@@ -41,4 +42,6 @@ model Document {
   content   String
   embedding Unsupported("vector(3072)")?
   createdAt DateTime @default(now())
+  userId    String   @default("")
+  isGlobal  Boolean  @default(false)
 }

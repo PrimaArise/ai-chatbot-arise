@@ -1,8 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+import { getSupabaseServer } from '@/lib/supabase-server';
 
 // ============================================================
 // CONFIG
@@ -75,7 +74,7 @@ function splitByTokens(text: string, sectionTitle: string): string[] {
 
             // Hitung berapa kata yang perlu dipertahankan sebagai overlap
             const overlapCharTarget = OVERLAP_TOKENS * 4;
-            let overlapWords: string[] = [];
+            const overlapWords: string[] = [];
             let overlapChars = 0;
 
             for (let i = current.length - 1; i >= 0; i--) {
@@ -158,9 +157,9 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // ============================================================
 // INGEST PIPELINE
 // ============================================================
-async function ingestDocument(rawText: string, source: string): Promise<ChunkResult[]> {
+async function ingestDocument(rawText: string, source: string, userId: string, isGlobal: boolean): Promise<ChunkResult[]> {
     const chunks = chunkDocument(rawText, source);
-    console.log(`[Ingest] "${source}" → ${chunks.length} chunk terdeteksi.`);
+    console.log(`[Ingest] "${source}" → ${chunks.length} chunk | userId=${userId} | isGlobal=${isGlobal}`);
 
     for (const chunk of chunks) {
         console.log(`  [Chunk] section="${chunk.section}" | tokens≈${countTokens(chunk.text)} | preview: ${chunk.text.substring(0, 60)}...`);
@@ -168,12 +167,14 @@ async function ingestDocument(rawText: string, source: string): Promise<ChunkRes
         const vectorString = `[${embedding.join(',')}]`;
 
         await prisma.$executeRaw`
-            INSERT INTO "Document" (id, content, embedding, "createdAt")
+            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", "isGlobal")
             VALUES (
                 gen_random_uuid()::text,
                 ${chunk.text},
                 ${vectorString}::vector(3072),
-                NOW()
+                NOW(),
+                ${userId},
+                ${isGlobal}
             )
         `;
     }
@@ -189,6 +190,20 @@ async function ingestDocument(rawText: string, source: string): Promise<ChunkRes
 // ============================================================
 export async function POST(req: Request) {
     try {
+        // 🔒 Auth: hanya user yang sudah login yang bisa ingest dokumen
+        const supabase = await getSupabaseServer();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized. Silakan login terlebih dahulu.' }, { status: 401 });
+        }
+        const userId = user.id;
+
+        // Ambil role user — isGlobal hanya diizinkan untuk admin
+        const roleRows = await prisma.$queryRaw<{ role: string }[]>`
+            SELECT role FROM "User" WHERE id = ${userId} LIMIT 1
+        `;
+        const isAdmin = roleRows?.[0]?.role === 'admin';
+
         const contentType = req.headers.get('content-type') || '';
         let rawText = '';
         let source = 'manual-input';
@@ -207,8 +222,31 @@ export async function POST(req: Request) {
             const buffer = Buffer.from(arrayBuffer);
 
             if (fileName.endsWith('.pdf')) {
-                const pdfData = await pdfParse(buffer);
-                rawText = pdfData.text;
+                try {
+                    // Gunakan lib path langsung — Next.js webpack membungkus CJS module
+                    // eslint-disable-next-line @typescript-eslint/no-require-imports
+                    const pdfParse = require('pdf-parse/lib/pdf-parse.js') as (
+                        buf: Buffer,
+                        opts?: Record<string, unknown>
+                    ) => Promise<{ text: string }>;
+                    const pdfData = await pdfParse(buffer, { max: 0 });
+                    rawText = pdfData.text?.trim() || '';
+                    if (!rawText) {
+                        return NextResponse.json(
+                            { error: 'PDF tidak memiliki teks yang bisa diekstrak. Kemungkinan PDF berisi gambar/scan. Coba konversi ke format .txt atau .md terlebih dahulu.' },
+                            { status: 400 }
+                        );
+                    }
+                } catch (pdfErr) {
+                    console.error('[PDF Parse Error]', pdfErr);
+                    return NextResponse.json(
+                        {
+                            error: 'Gagal membaca file PDF.',
+                            detail: 'File PDF mungkin corrupt, terproteksi password, atau formatnya tidak kompatibel. Coba konversi ke .txt atau .md terlebih dahulu.',
+                        },
+                        { status: 400 }
+                    );
+                }
             } else if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
                 rawText = buffer.toString('utf-8');
             } else {
@@ -218,29 +256,31 @@ export async function POST(req: Request) {
                 );
             }
         } else {
-            const body = await req.json();
-            rawText = body.content || '';
-            source = body.source || 'manual-input';
+            const jsonBody = await req.json() as { content?: string; source?: string; isGlobal?: boolean };
+            rawText = jsonBody.content || '';
+            source = jsonBody.source || 'manual-input';
+            // isGlobal hanya diizinkan jika user adalah admin
+            const isGlobal = isAdmin && jsonBody.isGlobal === true;
+
+            if (!rawText.trim()) {
+                return NextResponse.json(
+                    { error: 'Konten dokumen kosong atau tidak berhasil diekstrak.' },
+                    { status: 400 }
+                );
+            }
+
+            const chunks = await ingestDocument(rawText, source, userId, isGlobal);
+
+            return NextResponse.json({
+                success: true,
+                message: `Berhasil mengindeks ${chunks.length} chunk dari "${source}" ke knowledge base${isGlobal ? ' (Global)' : ''}.`,
+                chunks: chunks.map(c => ({
+                    section: c.section || '(no section)',
+                    preview: c.text.substring(0, 80) + '...',
+                    tokens: countTokens(c.text),
+                })),
+            });
         }
-
-        if (!rawText.trim()) {
-            return NextResponse.json(
-                { error: 'Konten dokumen kosong atau tidak berhasil diekstrak.' },
-                { status: 400 }
-            );
-        }
-
-        const chunks = await ingestDocument(rawText, source);
-
-        return NextResponse.json({
-            success: true,
-            message: `Berhasil mengindeks ${chunks.length} chunk dari "${source}" ke knowledge base.`,
-            chunks: chunks.map(c => ({
-                section: c.section || '(no section)',
-                preview: c.text.substring(0, 80) + '...',
-                tokens: countTokens(c.text),
-            })),
-        });
     } catch (error) {
         console.error('[Ingest] Error:', error);
         return NextResponse.json(

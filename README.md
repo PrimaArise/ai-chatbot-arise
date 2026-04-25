@@ -9,29 +9,34 @@ RAG adalah teknik yang memungkinkan AI menjawab berdasarkan dokumen spesifik yan
 ```
 [User bertanya]
       ↓
-[Gemini API: Ubah pertanyaan → vektor embedding 768 dimensi]
+[Gemini API: Ubah 3 pesan user terakhir → vektor embedding 3072 dimensi]
       ↓
-[Supabase pgvector: Cosine Similarity Search → top-3 chunk relevan]
+[Supabase pgvector: Cosine Similarity Search (threshold < 0.42) → top-5 chunk]
       ↓
 [Inject chunk sebagai "Konteks" ke dalam System Prompt]
       ↓
 [Groq LLaMA 3: Hasilkan jawaban berbasis konteks → stream ke UI]
+      ↓
+[Frontend: Tampilkan citation card "Sumber Referensi" di bawah jawaban AI]
 ```
 
 Kombinasi teknologi:
-- **Gemini `text-embedding-004`** — Mengubah teks menjadi vektor numerik 768 dimensi
+- **Gemini `gemini-embedding-2`** — Mengubah teks menjadi vektor numerik 3072 dimensi
 - **Supabase pgvector** — Database vektor untuk menyimpan dan mencari embedding secara efisien
 - **Groq LLaMA 3.3 70B** — Model LLM untuk menghasilkan jawaban akhir dari konteks yang ditemukan
 - **Prisma ORM** — Menjembatani skema database ke TypeScript dengan type-safe
+- **Vercel AI SDK** — Menangani streaming response dan data annotations ke frontend
 
 ## Fitur Utama
 
 - ⚡ **Streaming Responses**: Respons AI mengalir real-time via Vercel AI SDK & Groq
 - 🧠 **RAG Knowledge Base**: Bot bisa menjawab dari dokumen yang Anda indeks sendiri
+- 📎 **Citation Cards**: Bot menampilkan sumber referensi chunk mana yang dipakai untuk menjawab
 - 📝 **Markdown Support**: Pesan AI dirender dengan rapi (teks tebal, tabel, blok kode)
 - 🗄️ **Riwayat Obrolan**: Sidebar riwayat chat berbasis sesi pengguna
 - 🔐 **Autentikasi**: Login & Register aman menggunakan Supabase Auth
-- 🎨 **Modern UI**: Antarmuka modern dengan Tailwind CSS
+- 🗂️ **Kelola Knowledge Base**: Upload PDF/TXT/MD, edit chunk, hapus satu atau massal
+- 🎨 **Modern UI**: Antarmuka modern dark-mode
 
 ## Prasyarat
 
@@ -96,28 +101,40 @@ Buka [http://localhost:3000](http://localhost:3000) di browser.
 
 ## 📤 Mengisi Knowledge Base (Ingestion)
 
-Untuk mengindeks dokumen ke knowledge base RAG, gunakan endpoint `POST /api/ingest`.  
-Contoh menggunakan `curl`:
+Gunakan UI bawaan — klik tombol **⚙️ Kostumisasi AI** di sidebar:
+- **Tab "Upload Dokumen"**: Upload file `.pdf`, `.txt`, atau `.md`. Sistem otomatis memotong teks menjadi chunk ~400 kata dengan 50-kata overlap dan mengindeks embedding ke Supabase.
+- **Tab "Kelola Chunks"**: Lihat, edit, hapus satu atau banyak chunk sekaligus.
 
+Atau via `curl` (mode developer):
 ```bash
 curl -X POST http://localhost:3000/api/ingest \
   -H "Content-Type: application/json" \
   -d '{"content": "Arise adalah asisten AI yang dikembangkan untuk membantu mahasiswa..."}'
 ```
 
-Atau gunakan Postman/Insomnia untuk mengirimkan teks panjang (artikel, FAQ, materi pelajaran, dll.).  
-Sistem akan **otomatis memotong** teks menjadi chunk berukuran ~400 kata dan menyimpan embeddingnya ke Supabase.
-
 ---
 
 ## 🔄 Alur Chat dengan RAG
 
 Setiap kali pengguna mengirim pesan:
-1. Pesan diubah menjadi vektor embedding oleh Gemini API
-2. Supabase mencari dokumen dengan jarak cosine terdekat (top-3)
-3. Dokumen relevan disuntikkan ke System Prompt Groq
-4. Groq menghasilkan jawaban yang berlandaskan knowledge base tersebut
-5. Jawaban di-stream real-time ke UI
+1. **Query Window**: 3 pesan user terakhir digabung sebagai query embedding (bukan hanya 1 pesan) agar konteks percakapan tidak hilang
+2. **Embedding**: Query diubah menjadi vektor 3072 dimensi oleh Gemini API
+3. **Retrieval**: Supabase mencari top-5 chunk dengan jarak cosine `< 0.42` (threshold ketat untuk mengurangi noise)
+4. **Inject Context**: Chunk relevan disuntikkan ke System Prompt Groq
+5. **Streaming**: Groq menghasilkan jawaban dan di-stream real-time ke UI
+6. **Citations**: Frontend menampilkan card **"Sumber Referensi"** yang bisa diklik di bawah pesan AI — menampilkan snippet tiap chunk beserta persentase relevansinya
+7. **Token Guard**: History percakapan dibatasi maksimal 10 pesan dikirim ke Groq (pesan pertama + 9 terbaru) untuk mencegah token bloat
+
+---
+
+## 🔍 Parameter RAG (dapat dikonfigurasi di `src/app/api/chat/route.ts`)
+
+| Konstanta | Default | Keterangan |
+|-----------|---------|------------|
+| `MAX_HISTORY_MESSAGES` | `10` | Maks pesan dikirim ke LLM (token bloat guard) |
+| `RAG_DISTANCE_THRESHOLD` | `0.42` | Maks cosine distance dianggap relevan (lebih kecil = lebih ketat) |
+| `RAG_TOP_K` | `5` | Jumlah chunk terbaik yang diambil |
+| `RAG_QUERY_WINDOW` | `3` | Jumlah pesan user terakhir sebagai query embedding |
 
 ---
 
@@ -125,5 +142,14 @@ Setiap kali pengguna mengirim pesan:
 
 1. Push kode ke GitHub
 2. Import repository di [vercel.com](https://vercel.com)
-3. Tambahkan semua environment variables (termasuk `GEMINI_API_KEY`)
+3. Tambahkan semua environment variables di Settings → Environment Variables:
+   - `GROQ_API_KEY`
+   - `GEMINI_API_KEY`
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `DATABASE_URL`
+   - `DIRECT_URL`
 4. Deploy!
+
+> **Catatan**: Proyek ini sudah melewati full ESLint + TypeScript check tanpa error. Build Vercel berjalan tanpa flag `ignoreDuringBuilds`.
+
