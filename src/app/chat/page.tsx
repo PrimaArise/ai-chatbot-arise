@@ -113,8 +113,8 @@ const ChatMessage = memo(function ChatMessage({ m, citations }: { m: ChatMsg; ci
   );
 }, (prevProps, nextProps) => {
   return prevProps.m.content === nextProps.m.content &&
-         prevProps.m.role === nextProps.m.role &&
-         prevProps.citations === nextProps.citations;
+    prevProps.m.role === nextProps.m.role &&
+    prevProps.citations === nextProps.citations;
 });
 
 
@@ -229,7 +229,7 @@ function ChatComponent() {
     fetch('/api/me')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.role === 'admin') setUserRole('admin'); })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
 
@@ -328,8 +328,8 @@ function ChatComponent() {
       }
     }
     return [];
-  // ruanganId disertakan agar citations reset otomatis saat pindah sesi
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // ruanganId disertakan agar citations reset otomatis saat pindah sesi
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamData, ruanganId]);
 
   // Fetch rate limit status setiap kali jumlah pesan berubah (setelah kirim/terima)
@@ -338,7 +338,7 @@ function ChatComponent() {
     fetch('/api/rate-limit')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setRateLimit(d); })
-      .catch(() => {});
+      .catch(() => { });
   }, [messages.length]);
 
 
@@ -819,11 +819,10 @@ function ChatComponent() {
           {/* Role Badge — klik untuk ubah role */}
           <button
             onClick={() => { setShowRoleModal(v => !v); setOtpCode(''); setOtpSent(false); }}
-            className={`w-full flex items-center gap-2 py-2 px-3 rounded-xl border transition-all cursor-pointer ${
-              isAdmin
+            className={`w-full flex items-center gap-2 py-2 px-3 rounded-xl border transition-all cursor-pointer ${isAdmin
                 ? 'bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'
                 : 'bg-neutral-800/60 border-neutral-700 hover:bg-neutral-800'
-            }`}
+              }`}
           >
             <span className={`text-xs font-medium ${isAdmin ? 'text-amber-500' : 'text-neutral-500'}`}>Role :</span>
             {isAdmin
@@ -1071,10 +1070,9 @@ function ChatComponent() {
                 <div className="mt-2 px-1">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-neutral-600">
-                      Batas pesan: <span className={`font-semibold ${
-                        rateLimit.remaining <= 3 ? 'text-red-400' :
-                        rateLimit.remaining <= 8 ? 'text-yellow-400' : 'text-neutral-500'
-                      }`}>{rateLimit.remaining}/{rateLimit.max}</span> tersisa
+                      Batas pesan: <span className={`font-semibold ${rateLimit.remaining <= 3 ? 'text-red-400' :
+                          rateLimit.remaining <= 8 ? 'text-yellow-400' : 'text-neutral-500'
+                        }`}>{rateLimit.remaining}/{rateLimit.max}</span> tersisa
                     </span>
                     {rateLimit.used > 0 && (
                       <span className="text-[10px] text-neutral-700">
@@ -1084,10 +1082,9 @@ function ChatComponent() {
                   </div>
                   <div className="h-0.5 bg-neutral-800 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-500 ${
-                        rateLimit.remaining <= 3 ? 'bg-red-500' :
-                        rateLimit.remaining <= 8 ? 'bg-yellow-500' : 'bg-blue-500/50'
-                      }`}
+                      className={`h-full rounded-full transition-all duration-500 ${rateLimit.remaining <= 3 ? 'bg-red-500' :
+                          rateLimit.remaining <= 8 ? 'bg-yellow-500' : 'bg-blue-500/50'
+                        }`}
                       style={{ width: `${(rateLimit.used / rateLimit.max) * 100}%` }}
                     />
                   </div>
@@ -1154,7 +1151,7 @@ function ChatComponent() {
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 mr-2 bg-neutral-950 px-3 py-1.5 rounded-lg border border-neutral-800" title={isKbEnabled ? 'AI hanya menjawab dari dokumen' : 'AI bebas menjawab tanpa batasan dokumen'}>
                   <span className={`text-xs font-medium ${isKbEnabled ? 'text-blue-400' : 'text-neutral-500'}`}>
-                    KB {isKbEnabled ? 'Aktif' : 'Nonaktif'}
+                    Knowledge Based {isKbEnabled ? 'Aktif' : 'Nonaktif'}
                   </span>
                   <button
                     onClick={() => setIsKbEnabled(!isKbEnabled)}
@@ -1176,22 +1173,20 @@ function ChatComponent() {
             <div className="flex border-b border-neutral-800 shrink-0 px-5 pt-3">
               <button
                 onClick={() => setKostumiTab('upload')}
-                className={`flex items-center gap-2 pb-3 px-1 mr-6 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
-                  kostumiTab === 'upload'
+                className={`flex items-center gap-2 pb-3 px-1 mr-6 text-sm font-medium border-b-2 transition-colors cursor-pointer ${kostumiTab === 'upload'
                     ? 'border-blue-500 text-blue-400'
                     : 'border-transparent text-neutral-500 hover:text-neutral-300'
-                }`}
+                  }`}
               >
                 <Upload size={14} />
                 Upload Dokumen
               </button>
               <button
                 onClick={() => { setKostumiTab('chunks'); loadChunks(); }}
-                className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
-                  kostumiTab === 'chunks'
+                className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors cursor-pointer ${kostumiTab === 'chunks'
                     ? 'border-blue-500 text-blue-400'
                     : 'border-transparent text-neutral-500 hover:text-neutral-300'
-                }`}
+                  }`}
               >
                 <FileText size={14} />
                 Kelola Chunks
@@ -1262,11 +1257,10 @@ function ChatComponent() {
                         <button
                           type="button"
                           onClick={() => setIsGlobalUpload(v => !v)}
-                          className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer ${
-                            isGlobalUpload
+                          className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer ${isGlobalUpload
                               ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                               : 'bg-neutral-800 border-neutral-700 text-neutral-500 hover:text-neutral-300'
-                          }`}
+                            }`}
                           title={isGlobalUpload ? 'Dokumen akan tersedia untuk semua user' : 'Klik untuk jadikan dokumen global'}
                         >
                           <Shield size={11} />
@@ -1291,11 +1285,10 @@ function ChatComponent() {
                   {ingestResult && (
                     <div
                       ref={ingestResultRef}
-                      className={`rounded-xl px-4 py-3 text-sm font-medium ${
-                        ingestResult.startsWith('✅')
+                      className={`rounded-xl px-4 py-3 text-sm font-medium ${ingestResult.startsWith('✅')
                           ? 'bg-green-500/10 text-green-400 border border-green-500/20'
                           : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                      }`}
+                        }`}
                     >
                       {ingestResult}
                     </div>
@@ -1325,13 +1318,12 @@ function ChatComponent() {
                             onClick={toggleSelectAll}
                             className="flex items-center gap-2 text-xs text-neutral-400 hover:text-white transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-neutral-800"
                           >
-                            <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                              selectedChunkIds.size === chunks.length && chunks.length > 0
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${selectedChunkIds.size === chunks.length && chunks.length > 0
                                 ? 'bg-blue-600 border-blue-600'
                                 : selectedChunkIds.size > 0
                                   ? 'bg-blue-600/40 border-blue-500'
                                   : 'border-neutral-600'
-                            }`}>
+                              }`}>
                               {selectedChunkIds.size === chunks.length && chunks.length > 0 ? (
                                 <Check size={10} className="text-white" />
                               ) : selectedChunkIds.size > 0 ? (
@@ -1356,11 +1348,10 @@ function ChatComponent() {
                       {chunks.map((chunk) => (
                         <div
                           key={chunk.id}
-                          className={`border rounded-xl overflow-hidden transition-colors ${
-                            selectedChunkIds.has(chunk.id)
+                          className={`border rounded-xl overflow-hidden transition-colors ${selectedChunkIds.has(chunk.id)
                               ? 'border-blue-500/50 bg-blue-500/5'
                               : 'border-neutral-800'
-                          }`}
+                            }`}
                         >
                           <div className="flex items-center justify-between px-3 py-3 bg-neutral-950/60">
                             {/* Checkbox */}
@@ -1369,11 +1360,10 @@ function ChatComponent() {
                               className="shrink-0 mr-2 cursor-pointer"
                               title={selectedChunkIds.has(chunk.id) ? 'Batalkan pilihan' : 'Pilih chunk ini'}
                             >
-                              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                                selectedChunkIds.has(chunk.id)
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedChunkIds.has(chunk.id)
                                   ? 'bg-blue-600 border-blue-600'
                                   : 'border-neutral-600 hover:border-blue-500'
-                              }`}>
+                                }`}>
                                 {selectedChunkIds.has(chunk.id) && <Check size={10} className="text-white" />}
                               </div>
                             </button>
@@ -1406,11 +1396,10 @@ function ChatComponent() {
                                 }
                                 openEditChunk(chunk);
                               }}
-                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
-                                chunk.isGlobal && !isAdmin
+                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${chunk.isGlobal && !isAdmin
                                   ? 'text-neutral-700 cursor-not-allowed'
                                   : 'text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10'
-                              }`}
+                                }`}
                               title={chunk.isGlobal && !isAdmin ? 'Hanya admin yang dapat mengedit chunk global' : 'Edit chunk'}
                             >
                               <Edit2 size={14} />
@@ -1424,11 +1413,10 @@ function ChatComponent() {
                                 handleDeleteChunk(chunk.id);
                               }}
                               disabled={deletingChunkId === chunk.id}
-                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50 ${
-                                chunk.isGlobal && !isAdmin
+                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50 ${chunk.isGlobal && !isAdmin
                                   ? 'text-neutral-700 cursor-not-allowed'
                                   : 'text-neutral-500 hover:text-red-400 hover:bg-red-500/10'
-                              }`}
+                                }`}
                               title={chunk.isGlobal && !isAdmin ? 'Hanya admin yang dapat menghapus chunk global' : 'Hapus chunk'}
                             >
                               {deletingChunkId === chunk.id ? (
