@@ -699,7 +699,7 @@ function ChatComponent() {
             <Plus size={16} className="text-neutral-400" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-3 space-y-1 w-64 pb-16">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 w-64 pb-32">
           {/* Search riwayat chat */}
           <div className="relative mb-2">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600" />
@@ -967,7 +967,7 @@ function ChatComponent() {
           />
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto w-full">
+            <div className="flex-1 min-h-0 overflow-y-auto w-full">
               <div className="p-4 sm:p-6 w-full max-w-4xl mx-auto space-y-6">
                 {messages.map((m, idx) => {
                   // Citations ditampilkan hanya di pesan assistant paling akhir yang sedang/baru selesai
@@ -1197,7 +1197,7 @@ function ChatComponent() {
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-5">
+            <div className="flex-1 min-h-0 overflow-y-auto p-5">
 
               {/* === Tab Upload === */}
               {kostumiTab === 'upload' && (
@@ -1529,7 +1529,7 @@ function ChatComponent() {
             </div>
 
             {/* Textarea */}
-            <div className="flex-1 overflow-y-auto p-5">
+            <div className="flex-1 min-h-0 overflow-y-auto p-5">
               <textarea
                 value={editChunkContent}
                 onChange={(e) => setEditChunkContent(e.target.value)}
