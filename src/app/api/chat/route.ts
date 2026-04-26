@@ -68,7 +68,6 @@ function trimMessages(messages: CoreMessage[]): CoreMessage[] {
         return recent;
     }
 
-    console.log(`[Chat] Token bloat guard: ${messages.length} → ${MAX_HISTORY_MESSAGES} messages (trimmed ${messages.length - MAX_HISTORY_MESSAGES} lama)`);
     return [first, ...recent];
 }
 
@@ -121,13 +120,8 @@ async function retrieveRelevantContext(
         `;
 
         if (!docs || docs.length === 0) {
-            console.log(`[RAG] Tidak ada chunk relevan (threshold < ${RAG_DISTANCE_THRESHOLD})`);
             return { context: '', citations: [] };
         }
-
-        // Debug log jarak tiap chunk (berguna untuk fine-tuning threshold)
-        console.log(`[RAG] ${docs.length} chunk relevan ditemukan:`);
-        docs.forEach((d, i) => console.log(`  [${i + 1}] distance=${d.distance.toFixed(4)} | ${d.content.substring(0, 60)}...`));
 
         const context = docs
             .map((doc, i) => `[Referensi ${i + 1}]\n${doc.content}`)
@@ -202,7 +196,7 @@ export async function POST(req: Request) {
         }
 
         const body = await req.json();
-        const { chatId, messages: rawMessages } = body;
+        const { chatId, messages: rawMessages, kbEnabled = true } = body;
 
         if (!chatId) {
             console.error("Missing chatId in request:", body);
@@ -261,18 +255,28 @@ export async function POST(req: Request) {
         },
     });
 
-        // 🧠 Cek apakah knowledge base user ini sudah berisi dokumen
-        const kbExists = await hasKnowledgeBase(user.id);
+        // 🔀 KB Toggle — baca flag dari frontend (default: true = aktif)
+        const useKB = kbEnabled !== false;
+
+        // 🧠 Cek apakah knowledge base user ini sudah berisi dokumen (hanya kalau KB aktif)
+        const kbExists = useKB && await hasKnowledgeBase(user.id);
 
         // 🔍 Ambil konteks relevan dari knowledge base user ini via RAG
         const { context: ragContext, citations } = kbExists
             ? await retrieveRelevantContext(rawMessages, user.id)
             : { context: '', citations: [] };
 
-        // 📋 Bangun system prompt dengan 4-behavior logic
+        // 📋 Bangun system prompt berdasarkan mode
         let systemPrompt: string;
 
-        if (kbExists && ragContext) {
+        if (!useKB) {
+            // 🟢 MODE BEBAS: Knowledge Base dimatikan oleh user — AI bebas menjawab
+            systemPrompt = `Anda adalah AI chatbot bernama Arise, asisten cerdas yang siap membantu.
+Anda dapat menjawab pertanyaan apapun dari pengetahuan umum Anda secara bebas, akurat, dan membantu.
+Jawab secara natural, ramah, dan profesional.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English.`;
+
+        } else if (kbExists && ragContext) {
             // ✅ MODE AKTIF: KB ada + konteks relevan ditemukan
             systemPrompt = `Anda adalah AI chatbot bernama Arise yang dirancang untuk menjawab pertanyaan berdasarkan dokumen yang tersedia.
 

@@ -35,9 +35,8 @@ export async function GET() {
 
 // ============================================================
 // PATCH /api/me
-// Body: { targetRole: 'admin'|'user', verifyEmail?: string }
-// - Demote ke 'user' : tidak perlu verifikasi
-// - Promote ke 'admin': harus cocok dengan ADMIN_INVITE_EMAIL
+// Body: { targetRole: 'user' }
+// Hanya untuk DEMOTE ke user — promote ke admin via /api/promote-request + /api/promote-verify
 // ============================================================
 export async function PATCH(req: Request) {
     try {
@@ -45,30 +44,23 @@ export async function PATCH(req: Request) {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        const body = await req.json() as { targetRole?: string; verifyEmail?: string };
-        const { targetRole, verifyEmail } = body;
+        const body = await req.json() as { targetRole?: string };
+        const { targetRole } = body;
 
-        if (targetRole !== 'admin' && targetRole !== 'user') {
-            return NextResponse.json({ error: 'targetRole harus "admin" atau "user".' }, { status: 400 });
+        // Hanya izinkan demote ke 'user'
+        if (targetRole !== 'user') {
+            return NextResponse.json(
+                { error: 'Untuk promote ke admin, gunakan fitur OTP melalui panel Role.' },
+                { status: 400 }
+            );
         }
 
-        // Promote ke admin: wajib verifikasi email
-        if (targetRole === 'admin') {
-            const validEmail = process.env.ADMIN_INVITE_EMAIL;
-            if (!validEmail || verifyEmail?.trim() !== validEmail.trim()) {
-                return NextResponse.json({ error: 'Email verifikasi admin tidak valid.' }, { status: 403 });
-            }
-        }
-
-        // Update role di database
-        await prisma.$executeRaw`UPDATE "User" SET role = ${targetRole} WHERE id = ${user.id}`;
+        await prisma.$executeRaw`UPDATE "User" SET role = 'user' WHERE id = ${user.id}`;
 
         return NextResponse.json({
             success: true,
-            role: targetRole,
-            message: targetRole === 'admin'
-                ? '✅ Role berhasil diubah menjadi Admin.'
-                : '✅ Role berhasil diubah menjadi User.',
+            role: 'user',
+            message: '✅ Role berhasil diubah menjadi User.',
         });
     } catch (error) {
         console.error('[PATCH /api/me] Error:', error);

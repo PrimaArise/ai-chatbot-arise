@@ -159,13 +159,11 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // ============================================================
 async function ingestDocument(rawText: string, source: string, userId: string, isGlobal: boolean): Promise<{ chunks: ChunkResult[]; inserted: number; skipped: number }> {
     const chunks = chunkDocument(rawText, source);
-    console.log(`[Ingest] "${source}" → ${chunks.length} chunk | userId=${userId} | isGlobal=${isGlobal}`);
 
     let inserted = 0;
     let skipped = 0;
 
     for (const chunk of chunks) {
-        console.log(`  [Chunk] section="${chunk.section}" | tokens≈${countTokens(chunk.text)} | preview: ${chunk.text.substring(0, 60)}...`);
         const embedding = await generateEmbedding(chunk.text);
         const vectorString = `[${embedding.join(',')}]`;
 
@@ -191,11 +189,9 @@ async function ingestDocument(rawText: string, source: string, userId: string, i
             inserted++;
         } else {
             skipped++;
-            console.log(`  [Dedup] Chunk duplikat dilewati: "${chunk.text.substring(0, 60)}..."`);
         }
     }
 
-    console.log(`[Ingest] Selesai: ${inserted} chunk diindeks, ${skipped} chunk duplikat dilewati.`);
     return { chunks, inserted, skipped };
 }
 

@@ -5,7 +5,7 @@
  * For multi-instance production, use Upstash Redis.
  */
 const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
-const RATE_LIMIT_MAX = 20;
+export const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 menit
 
 export function checkRateLimit(userId: string): {
@@ -31,5 +31,39 @@ export function checkRateLimit(userId: string): {
         allowed: true,
         remaining: RATE_LIMIT_MAX - entry.count,
         resetInMs: RATE_LIMIT_WINDOW_MS - (now - entry.windowStart),
+    };
+}
+
+/**
+ * Membaca status rate limit tanpa mengkonsumsi slot.
+ * Digunakan oleh endpoint GET /api/rate-limit untuk tampilan di UI.
+ */
+export function getRateLimitStatus(userId: string): {
+    used: number;
+    remaining: number;
+    max: number;
+    resetInMs: number;
+    resetsAt: number; // Unix timestamp (ms) kapan window reset
+} {
+    const now = Date.now();
+    const entry = rateLimitMap.get(userId);
+
+    if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+        return {
+            used: 0,
+            remaining: RATE_LIMIT_MAX,
+            max: RATE_LIMIT_MAX,
+            resetInMs: RATE_LIMIT_WINDOW_MS,
+            resetsAt: now + RATE_LIMIT_WINDOW_MS,
+        };
+    }
+
+    const resetInMs = Math.max(0, RATE_LIMIT_WINDOW_MS - (now - entry.windowStart));
+    return {
+        used: entry.count,
+        remaining: Math.max(0, RATE_LIMIT_MAX - entry.count),
+        max: RATE_LIMIT_MAX,
+        resetInMs,
+        resetsAt: entry.windowStart + RATE_LIMIT_WINDOW_MS,
     };
 }

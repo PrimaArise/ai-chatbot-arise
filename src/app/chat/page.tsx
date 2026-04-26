@@ -121,11 +121,14 @@ const ChatMessage = memo(function ChatMessage({ m, citations }: { m: ChatMsg; ci
 function ChatComponent() {
   const router = useRouter();
 
+  // ===== State utama sesi chat =====
+  // ruanganId = ID sesi obrolan yang sedang aktif (dipakai sebagai primary key di database)
   const [ruanganId, setRuanganId] = useState('');
   const [chatList, setChatList] = useState<{ id: string; title: string }[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
+  // ===== State dropdown & edit judul chat di sidebar =====
   const [dropdownOpenId, setDropdownOpenId] = useState<string | null>(null);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editTitleBuffer, setEditTitleBuffer] = useState('');
@@ -161,7 +164,8 @@ function ChatComponent() {
 
   // ===== Role change modal =====
   const [showRoleModal, setShowRoleModal] = useState(false);
-  const [roleVerifyEmail, setRoleVerifyEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
   const [isChangingRole, setIsChangingRole] = useState(false);
 
   // ===== isGlobal toggle untuk admin saat upload =====
@@ -173,6 +177,14 @@ function ChatComponent() {
   // ===== Export state =====
   const [isExporting, setIsExporting] = useState<string | null>(null);
 
+  // ===== KB Toggle state =====
+  const [isKbEnabled, setIsKbEnabled] = useState(true);
+
+  // ===== Rate Limit indicator =====
+  type RateLimitStatus = { used: number; remaining: number; max: number; resetInMs: number; resetsAt: number };
+  const [rateLimit, setRateLimit] = useState<RateLimitStatus | null>(null);
+  const [rlCountdown, setRlCountdown] = useState(0);
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -183,6 +195,8 @@ function ChatComponent() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Sinkronisasi URL query param (?id=xxx) dengan sesi chat yang aktif
+  // Memungkinkan user untuk share/bookmark URL sesi langsung
   useEffect(() => {
     if (ruanganId) {
       router.replace(`?id=${ruanganId}`, { scroll: false });
@@ -191,6 +205,7 @@ function ChatComponent() {
     }
   }, [ruanganId, router]);
 
+  // Guard autentikasi — redirect ke halaman login jika sesi Supabase tidak valid
   useEffect(() => {
     const checkUser = async () => {
       const { data } = await supabase.auth.getUser();
@@ -208,6 +223,8 @@ function ChatComponent() {
     }
   }, [ingestResult]);
 
+  // Ambil role user (admin/user) saat pertama kali komponen dimuat
+  // Role dipakai untuk menentukan akses global upload dokumen
   useEffect(() => {
     fetch('/api/me')
       .then(r => r.ok ? r.json() : null)
@@ -215,27 +232,24 @@ function ChatComponent() {
       .catch(() => {});
   }, []);
 
+
+  // Countdown timer — hitung mundur detik sampai window rate limit reset
+  useEffect(() => {
+    if (!rateLimit || rateLimit.used === 0) return;
+    const tick = () => {
+      const sisa = Math.max(0, Math.ceil((rateLimit.resetsAt - Date.now()) / 1000));
+      setRlCountdown(sisa);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [rateLimit]);
+
+  // ===== Handler perubahan role via OTP =====
+
+  // Downgrade dari Admin ke User — tidak memerlukan verifikasi tambahan
   const handleRoleChange = async (targetRole: 'admin' | 'user') => {
-    if (targetRole === 'admin') {
-      const verifyEmail = roleVerifyEmail.trim();
-      if (!verifyEmail) { return; }
-      setIsChangingRole(true);
-      const res = await fetch('/api/me', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetRole: 'admin', verifyEmail }),
-      });
-      const result = await res.json();
-      setIsChangingRole(false);
-      if (res.ok) {
-        setUserRole('admin');
-        setShowRoleModal(false);
-        setRoleVerifyEmail('');
-        toast.success('Role berhasil diubah menjadi Admin!');
-      } else {
-        toast.error(result.error || 'Verifikasi gagal.');
-      }
-    } else {
+    if (targetRole === 'user') {
       setIsChangingRole(true);
       const res = await fetch('/api/me', {
         method: 'PATCH',
@@ -254,9 +268,48 @@ function ChatComponent() {
     }
   };
 
-  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, reload, data: streamData } = useChat({
+  // Kirim permintaan OTP ke email admin untuk proses promosi ke Admin
+  const handleRequestOtp = async () => {
+    setIsChangingRole(true);
+    const res = await fetch('/api/promote-request', { method: 'POST' });
+    const result = await res.json();
+    setIsChangingRole(false);
+    if (res.ok) {
+      setOtpSent(true);
+      toast.success('Kode OTP dikirim ke email admin!');
+    } else {
+      toast.error(result.error || 'Gagal mengirim OTP.');
+    }
+  };
+
+  // Verifikasi kode OTP 6-digit dari admin dan ubah role ke Admin jika valid
+  const handleVerifyOtp = async () => {
+    if (otpCode.trim().length !== 6) { toast.error('Kode OTP harus 6 digit.'); return; }
+    setIsChangingRole(true);
+    const res = await fetch('/api/promote-verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ otp: otpCode.trim() }),
+    });
+    const result = await res.json();
+    setIsChangingRole(false);
+    if (res.ok) {
+      setUserRole('admin');
+      setShowRoleModal(false);
+      setOtpCode('');
+      setOtpSent(false);
+      toast.success('✅ Selamat! Anda sekarang menjadi Admin!');
+    } else {
+      toast.error(result.error || 'Kode OTP tidak valid.');
+    }
+  };
+
+  // Hook utama Vercel AI SDK untuk streaming chat
+  // kbEnabled dikirim ke API sebagai flag apakah RAG aktif atau tidak
+  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, append, data: streamData } = useChat({
     body: {
-      chatId: ruanganId
+      chatId: ruanganId,
+      kbEnabled: isKbEnabled
     },
     onError: () => {
       toast.error('Gagal terhubung ke AI. Silakan coba lagi.', { id: 'ai-error' });
@@ -279,11 +332,21 @@ function ChatComponent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamData, ruanganId]);
 
+  // Fetch rate limit status setiap kali jumlah pesan berubah (setelah kirim/terima)
+  // Ditempatkan SETELAH useChat agar `messages` sudah dideklarasikan
+  useEffect(() => {
+    fetch('/api/rate-limit')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setRateLimit(d); })
+      .catch(() => {});
+  }, [messages.length]);
+
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isFirstLoad = useRef(true);
   const lastScrollTime = useRef(0);
 
+  // Reload daftar riwayat chat di sidebar setiap kali ada pesan baru dikirim/diterima
   useEffect(() => {
     const loadChats = async () => {
       try {
@@ -297,6 +360,7 @@ function ChatComponent() {
     loadChats();
   }, [messages.length]);
 
+  // Muat riwayat pesan dari database setiap kali sesi chat berganti (ruanganId berubah)
   useEffect(() => {
     if (!ruanganId) {
       const t = setTimeout(() => setIsLoadingHistory(false), 0);
@@ -322,6 +386,8 @@ function ChatComponent() {
     loadMessages();
   }, [ruanganId, setMessages]);
 
+  // Auto-scroll ke pesan terbawah dengan throttle 150ms agar tidak terlalu sering dipicu
+  // Saat pertama load, scroll langsung ke bawah dengan sedikit delay untuk menunggu render
   useEffect(() => {
     if (!isLoadingHistory && messagesEndRef.current) {
       if (isFirstLoad.current) {
@@ -339,6 +405,7 @@ function ChatComponent() {
     }
   }, [messages, isLoadingHistory]);
 
+  // Buat sesi chat baru — reset semua state terkait sesi aktif
   const buatChatBaru = () => {
     if (isLoading) {
       toast.error('Harap tunggu AI selesai membalas terlebih dahulu.', { id: 'loading-lock' });
@@ -350,6 +417,8 @@ function ChatComponent() {
     setIsSidebarOpen(false);
   };
 
+  // Submit pesan ke AI — generate chatId baru jika ini sesi pertama,
+  // dan sertakan flag kbEnabled agar backend tahu mode RAG yang aktif
   const handleCustomSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!input.trim()) return;
@@ -357,23 +426,25 @@ function ChatComponent() {
     if (!ruanganId) {
       const newId = nanoid();
       setRuanganId(newId);
-
-      originalSubmit(e, { body: { chatId: newId } });
+      originalSubmit(e, { body: { chatId: newId, kbEnabled: isKbEnabled } });
     } else {
-      originalSubmit(e);
+      originalSubmit(e, { body: { chatId: ruanganId, kbEnabled: isKbEnabled } });
     }
   };
 
+  // Toggle buka/tutup sidebar
   const toggleSidebar = () => {
     setIsSidebarOpen(!isSidebarOpen);
   };
 
+  // Set chat yang akan dihapus, lalu tutup dropdown
   const handleDeleteClick = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setChatToDelete(id);
     setDropdownOpenId(null);
   };
 
+  // Konfirmasi hapus chat — hapus dari DB dan update list di sidebar
   const confirmDeleteChat = async () => {
     if (!chatToDelete) return;
     setIsDeleting(true);
@@ -389,6 +460,7 @@ function ChatComponent() {
     setChatToDelete(null);
   };
 
+  // Mulai mode edit judul chat
   const startEditing = (chat: { id: string; title: string }, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingChatId(chat.id);
@@ -396,6 +468,7 @@ function ChatComponent() {
     setDropdownOpenId(null);
   };
 
+  // Simpan judul baru ke API jika berbeda dari judul lama
   const submitEdit = async (id: string, e?: React.MouseEvent | React.FormEvent) => {
     if (e) {
       e.preventDefault();
@@ -418,11 +491,13 @@ function ChatComponent() {
     setEditingChatId(null);
   };
 
+  // Batal edit judul chat
   const cancelEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingChatId(null);
   };
 
+  // Logout dari Supabase dan redirect ke halaman login
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push('/login');
@@ -517,6 +592,7 @@ function ChatComponent() {
     setIsIngesting(false);
   };
 
+  // Hapus satu chunk dokumen dari knowledge base
   const handleDeleteChunk = async (id: string) => {
     setDeletingChunkId(id);
     try {
@@ -528,6 +604,7 @@ function ChatComponent() {
     setDeletingChunkId(null);
   };
 
+  // Toggle seleksi satu chunk untuk operasi bulk delete
   const toggleSelectChunk = (id: string) => {
     setSelectedChunkIds(prev => {
       const next = new Set(prev);
@@ -536,6 +613,7 @@ function ChatComponent() {
     });
   };
 
+  // Toggle pilih semua / batal pilih semua chunk
   const toggleSelectAll = () => {
     if (selectedChunkIds.size === chunks.length) {
       setSelectedChunkIds(new Set());
@@ -544,6 +622,7 @@ function ChatComponent() {
     }
   };
 
+  // Hapus semua chunk yang dipilih secara massal via API
   const handleBulkDelete = async () => {
     if (selectedChunkIds.size === 0) return;
     setIsBulkDeleting(true);
@@ -567,12 +646,14 @@ function ChatComponent() {
     setShowBulkDeleteConfirm(false);
   };
 
+  // Buka mode edit untuk satu chunk — memuat konten ke textarea
   const openEditChunk = (chunk: { id: string; content: string }) => {
     setEditingChunkId(chunk.id);
     setEditChunkContent(chunk.content);
     setExpandedChunkId(null);
   };
 
+  // Simpan perubahan konten chunk ke database via API PATCH
   const handleUpdateChunk = async () => {
     if (!editingChunkId || !editChunkContent.trim()) return;
     setIsUpdatingChunk(true);
@@ -596,6 +677,7 @@ function ChatComponent() {
     setIsUpdatingChunk(false);
   };
 
+  // Halaman dianggap kosong jika belum ada sesi atau belum ada pesan — tampilkan WelcomeScreen
   const isChatEmpty = !ruanganId || messages.length === 0;
 
   return (
@@ -736,7 +818,7 @@ function ChatComponent() {
         <div className="p-4 border-t border-neutral-800 shrink-0 w-64 absolute bottom-0 bg-neutral-900 z-10 space-y-2">
           {/* Role Badge — klik untuk ubah role */}
           <button
-            onClick={() => { setShowRoleModal(v => !v); setRoleVerifyEmail(''); }}
+            onClick={() => { setShowRoleModal(v => !v); setOtpCode(''); setOtpSent(false); }}
             className={`w-full flex items-center gap-2 py-2 px-3 rounded-xl border transition-all cursor-pointer ${
               isAdmin
                 ? 'bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'
@@ -773,26 +855,50 @@ function ChatComponent() {
                   </button>
                 </>
               ) : (
-                // User → promote ke admin (butuh verifikasi email)
+                // User → promote ke admin via OTP email
                 <>
-                  <p className="text-xs text-neutral-400">Untuk menjadi <span className="text-amber-400 font-medium">Admin</span>, masukkan email verifikasi yang diberikan pengelola sistem.</p>
-                  <input
-                    type="email"
-                    placeholder="Email verifikasi admin..."
-                    value={roleVerifyEmail}
-                    onChange={e => setRoleVerifyEmail(e.target.value)}
-                    className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 focus:border-amber-500/50 rounded-lg text-xs text-neutral-200 placeholder-neutral-600 outline-none transition-colors"
-                  />
-                  <button
-                    onClick={() => handleRoleChange('admin')}
-                    disabled={isChangingRole || !roleVerifyEmail.trim()}
-                    className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    {isChangingRole
-                      ? <Loader2 size={12} className="animate-spin" />
-                      : <Shield size={12} />}
-                    Promote ke Admin
-                  </button>
+                  {!otpSent ? (
+                    <>
+                      <p className="text-xs text-neutral-400">Untuk menjadi <span className="text-amber-400 font-medium">Admin</span>, kirim permintaan ke pengelola sistem. Kode OTP akan dikirim ke email admin.</p>
+                      <button
+                        onClick={handleRequestOtp}
+                        disabled={isChangingRole}
+                        className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {isChangingRole ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+                        Kirim Permintaan ke Admin
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-green-400">✅ Kode OTP dikirim ke email admin. Minta kodenya lalu masukkan di bawah.</p>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder="Masukkan 6 digit kode..."
+                        value={otpCode}
+                        onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                        className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 focus:border-amber-500/50 rounded-lg text-sm text-center text-neutral-200 placeholder-neutral-600 outline-none transition-colors tracking-widest font-mono"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => { setOtpSent(false); setOtpCode(''); }}
+                          className="flex-1 py-2 px-3 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-400 rounded-lg text-xs transition-all cursor-pointer"
+                        >
+                          Kirim Ulang
+                        </button>
+                        <button
+                          onClick={handleVerifyOtp}
+                          disabled={isChangingRole || otpCode.length !== 6}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
+                        >
+                          {isChangingRole ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+                          Verifikasi
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -911,7 +1017,12 @@ function ChatComponent() {
                   </button>
                 ) : messages.length > 0 && messages[messages.length - 1].role === 'assistant' && (
                   <button
-                    onClick={() => reload()}
+                    onClick={() => {
+                      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+                      if (lastUserMsg) {
+                        append({ role: 'user', content: lastUserMsg.content });
+                      }
+                    }}
                     className="flex items-center justify-center gap-2 px-4 py-2 bg-neutral-800/60 hover:bg-neutral-700 border border-neutral-700/50 text-neutral-500 hover:text-neutral-300 rounded-full text-xs font-medium transition-colors cursor-pointer"
                   >
                     <RefreshCw size={12} />
@@ -954,6 +1065,34 @@ function ChatComponent() {
                   </button>
                 </form>
               </div>
+
+              {/* Rate Limit Indicator */}
+              {rateLimit !== null && (
+                <div className="mt-2 px-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-neutral-600">
+                      Batas pesan: <span className={`font-semibold ${
+                        rateLimit.remaining <= 3 ? 'text-red-400' :
+                        rateLimit.remaining <= 8 ? 'text-yellow-400' : 'text-neutral-500'
+                      }`}>{rateLimit.remaining}/{rateLimit.max}</span> tersisa
+                    </span>
+                    {rateLimit.used > 0 && (
+                      <span className="text-[10px] text-neutral-700">
+                        reset dalam {rlCountdown}d
+                      </span>
+                    )}
+                  </div>
+                  <div className="h-0.5 bg-neutral-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        rateLimit.remaining <= 3 ? 'bg-red-500' :
+                        rateLimit.remaining <= 8 ? 'bg-yellow-500' : 'bg-blue-500/50'
+                      }`}
+                      style={{ width: `${(rateLimit.used / rateLimit.max) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1012,12 +1151,25 @@ function ChatComponent() {
                   <p className="text-xs text-neutral-500">Kelola knowledge base Arise</p>
                 </div>
               </div>
-              <button
-                onClick={() => setIsKostumiModal(false)}
-                className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 mr-2 bg-neutral-950 px-3 py-1.5 rounded-lg border border-neutral-800" title={isKbEnabled ? 'AI hanya menjawab dari dokumen' : 'AI bebas menjawab tanpa batasan dokumen'}>
+                  <span className={`text-xs font-medium ${isKbEnabled ? 'text-blue-400' : 'text-neutral-500'}`}>
+                    KB {isKbEnabled ? 'Aktif' : 'Nonaktif'}
+                  </span>
+                  <button
+                    onClick={() => setIsKbEnabled(!isKbEnabled)}
+                    className={`relative w-8 h-4 rounded-full transition-colors cursor-pointer ${isKbEnabled ? 'bg-blue-600' : 'bg-neutral-700'}`}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${isKbEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+                <button
+                  onClick={() => setIsKostumiModal(false)}
+                  className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             {/* Tabs */}

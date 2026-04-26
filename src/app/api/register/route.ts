@@ -4,31 +4,54 @@ import { prisma } from '@/lib/prisma';
 
 // ============================================================
 // POST /api/register
-// Body: { email, password, isAdmin?, adminVerifyEmail? }
+// Body: { email, password, otp? }
+// - Tanpa otp → role: user
+// - Dengan otp valid → role: admin (setelah verifikasi OTP)
+// - Email = ADMIN_INVITE_EMAIL → auto admin (untuk owner)
 // ============================================================
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const { email, password, isAdmin, adminVerifyEmail } = body as {
+        const { email, password, otp } = body as {
             email: string;
             password: string;
-            isAdmin?: boolean;
-            adminVerifyEmail?: string;
+            otp?: string;
         };
 
         if (!email || !password) {
             return NextResponse.json({ error: 'Email dan password diperlukan.' }, { status: 400 });
         }
 
-        // 🛡️ Validasi admin: cek email verifikasi terhadap env var
+        // 🛡️ Tentukan role
         let role = 'user';
-        if (isAdmin) {
-            const validAdminEmail = process.env.ADMIN_INVITE_EMAIL;
-            if (!validAdminEmail || adminVerifyEmail?.trim() !== validAdminEmail.trim()) {
+        const adminEmail = process.env.ADMIN_INVITE_EMAIL?.trim().toLowerCase();
+
+        if (adminEmail && email.trim().toLowerCase() === adminEmail) {
+            // Owner/pemilik sistem → otomatis admin
+            role = 'admin';
+        } else if (otp?.trim()) {
+            // Ada OTP → verifikasi terhadap PromoteToken (userId = email pendaftar)
+            const emailKey = email.trim().toLowerCase();
+            const tokens = await prisma.$queryRaw<{ id: string }[]>`
+                SELECT id FROM "PromoteToken"
+                WHERE "userId" = ${emailKey}
+                  AND otp = ${otp.trim()}
+                  AND used = false
+                  AND "expiresAt" > NOW()
+                ORDER BY "createdAt" DESC
+                LIMIT 1
+            `;
+
+            if (!tokens || tokens.length === 0) {
                 return NextResponse.json({
-                    error: 'Email verifikasi admin tidak valid. Akses ditolak.',
+                    error: 'Kode OTP tidak valid atau sudah kedaluwarsa. Minta kode baru dari admin.',
                 }, { status: 403 });
             }
+
+            // Tandai token terpakai
+            await prisma.$executeRaw`
+                UPDATE "PromoteToken" SET used = true WHERE id = ${tokens[0].id}
+            `;
             role = 'admin';
         }
 
