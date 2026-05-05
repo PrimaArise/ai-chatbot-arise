@@ -306,7 +306,7 @@ function ChatComponent() {
 
   // Hook utama Vercel AI SDK untuk streaming chat
   // kbEnabled dikirim ke API sebagai flag apakah RAG aktif atau tidak
-  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, append, data: streamData } = useChat({
+  const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, append, data: streamData, setInput } = useChat({
     body: {
       chatId: ruanganId,
       kbEnabled: isKbEnabled
@@ -688,7 +688,7 @@ function ChatComponent() {
         className={`${isSidebarOpen ? 'w-64' : 'w-0'
           } bg-neutral-900 border-r border-neutral-800 flex flex-col shrink-0 transition-all duration-300 ease-in-out relative overflow-hidden`}
       >
-        <div className="p-4 border-b border-transparent flex items-center shrink-0 w-64 mt-2 sticky top-0 bg-neutral-900 z-10">
+        <div className="p-4 border-b border-transparent flex items-center shrink-0 w-64 mt-2 bg-neutral-900">
           <button
             onClick={buatChatBaru}
             className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-200 py-3 px-4 rounded-xl font-medium transition-all shadow-sm flex items-center justify-between text-sm whitespace-nowrap border border-neutral-700">
@@ -699,7 +699,7 @@ function ChatComponent() {
             <Plus size={16} className="text-neutral-400" />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 w-64 pb-32">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 w-64">
           {/* Search riwayat chat */}
           <div className="relative mb-2">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600" />
@@ -815,7 +815,7 @@ function ChatComponent() {
           ))}
         </div>
 
-        <div className="p-4 border-t border-neutral-800 shrink-0 w-64 absolute bottom-0 bg-neutral-900 z-10 space-y-2">
+        <div className="p-4 border-t border-neutral-800 shrink-0 w-64 bg-neutral-900 space-y-2">
           {/* Role Badge — klik untuk ubah role */}
           <button
             onClick={() => { setShowRoleModal(v => !v); setOtpCode(''); setOtpSent(false); }}
@@ -964,6 +964,7 @@ function ChatComponent() {
             input={input}
             handleInputChange={handleInputChange}
             handleSubmit={handleCustomSubmit}
+            setInput={setInput}
           />
         ) : (
           <>

@@ -21,6 +21,7 @@
     "bcrypt": "^6.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.577.0",
+    "nanoid": "^5.1.11",
     "next": "^15.5.12",
     "pdf-parse": "^1.1.1",
     "react": "^19.2.4",
