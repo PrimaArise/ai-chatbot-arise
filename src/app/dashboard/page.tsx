@@ -70,32 +70,32 @@ export default function DashboardPage() {
     };
 
     return (
-        <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans p-4 sm:p-8">
+        <div className="min-h-dvh bg-neutral-950 text-neutral-100 font-sans p-3 sm:p-8">
             <div className="max-w-5xl mx-auto">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-8">
-                    <div className="flex items-center gap-4">
+                <div className="flex items-center justify-between mb-5 sm:mb-8">
+                    <div className="flex items-center gap-2 sm:gap-4">
                         <button
                             onClick={() => router.push('/chat')}
                             className="p-2 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer"
                         >
-                            <ArrowLeft size={20} />
+                            <ArrowLeft size={18} />
                         </button>
                         <div>
-                            <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-                                <BarChart2 size={24} className="text-blue-400" />
+                            <h1 className="text-lg sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                                <BarChart2 size={20} className="text-blue-400" />
                                 Dashboard
                             </h1>
-                            <p className="text-sm text-neutral-500 mt-0.5">Statistik penggunaan AI Arise</p>
+                            <p className="text-xs text-neutral-500 hidden sm:block mt-0.5">Statistik penggunaan AI Arise</p>
                         </div>
                     </div>
                     <button
                         onClick={fetchStats}
                         disabled={isLoading}
-                        className="flex items-center gap-2 px-3 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-sm text-neutral-300 cursor-pointer transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg text-xs sm:text-sm text-neutral-300 cursor-pointer transition-colors disabled:opacity-50"
                     >
-                        <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-                        Refresh
+                        <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
+                        <span className="hidden sm:inline">Refresh</span>
                     </button>
                 </div>
 

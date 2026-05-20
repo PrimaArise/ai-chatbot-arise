@@ -46,16 +46,16 @@ export default function LoginPage() {
     };
 
     return (
-        <div className="flex min-h-screen bg-neutral-950 text-neutral-100 items-center justify-center p-4 font-sans">
+        <div className="flex min-h-dvh bg-neutral-950 text-neutral-100 items-start sm:items-center justify-center p-4 font-sans overflow-y-auto">
             <Toaster position="top-center" toastOptions={{ style: { background: '#262626', color: '#fff', border: '1px solid #404040' } }} />
             
-            <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 shadow-2xl rounded-3xl p-8 transition-all">
-                <div className="text-center mb-8">
-                    <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">AI Chatbot Arise</h1>
-                    <p className="text-neutral-400 text-sm">Selamat datang kembali! Silakan login untuk melanjutkan.</p>
+            <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 shadow-2xl rounded-3xl p-5 sm:p-8 my-4 transition-all">
+                <div className="text-center mb-5 sm:mb-8">
+                    <h1 className="text-xl sm:text-2xl font-bold text-white mb-1 tracking-tight">AI Chatbot Arise</h1>
+                    <p className="text-neutral-400 text-xs sm:text-sm">Selamat datang kembali! Silakan login untuk melanjutkan.</p>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-5">
+                <form onSubmit={handleLogin} className="space-y-3 sm:space-y-5">
                     <div className="space-y-1.5">
                         <label className="text-sm font-medium text-neutral-300">Email Address</label>
                         <div className="relative">
@@ -95,10 +95,16 @@ export default function LoginPage() {
                         </div>
                     </div>
 
+                    <div className="flex justify-end">
+                        <Link href="/forgot-password" className="text-xs text-neutral-500 hover:text-blue-400 transition-colors">
+                            Lupa password?
+                        </Link>
+                    </div>
+
                     <button 
                         type="submit" 
                         disabled={isLoading || !email || !password}
-                        className="w-full mt-6 bg-white hover:bg-neutral-200 text-black py-3 rounded-xl font-semibold text-sm transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed cursor-pointer"
+                        className="w-full mt-2 bg-white hover:bg-neutral-200 text-black py-3 rounded-xl font-semibold text-sm transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed cursor-pointer"
                     >
                         {isLoading ? (
                             <div className="h-5 w-5 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
@@ -111,7 +117,7 @@ export default function LoginPage() {
                     </button>
                 </form>
 
-                <p className="text-sm text-neutral-500 text-center mt-8">
+                <p className="text-xs sm:text-sm text-neutral-500 text-center mt-5 sm:mt-8">
                     Belum memiliki akun?{' '}
                     <Link href="/register" className="text-white hover:text-blue-400 font-medium transition-colors underline underline-offset-4 decoration-neutral-700 hover:decoration-blue-400">
                         Daftar sekarang

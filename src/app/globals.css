@@ -76,10 +76,3 @@ select {
 button, a {
   -webkit-tap-highlight-color: transparent;
 }
-
-/* Pastikan body tidak overflow di mobile */
-html, body {
-  overflow: hidden;
-  height: 100%;
-  height: -webkit-fill-available;
-}
