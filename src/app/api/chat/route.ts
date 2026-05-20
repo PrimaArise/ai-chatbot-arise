@@ -18,16 +18,23 @@ import { checkRateLimit } from '@/lib/rate-limit';
 const MAX_HISTORY_MESSAGES = 10;
 
 /**
- * Threshold cosine distance untuk RAG retrieval.
- * Nilai lebih kecil = lebih ketat (hanya chunk yang sangat mirip).
- * Range: 0.0 (identik) → 2.0 (berlawanan). Praktis: < 0.42 = relevan.
+ * Threshold cosine distance untuk RAG retrieval (pass 1 — strict).
+ * Dinaikkan dari 0.42 → 0.55 agar pertanyaan yang diparafrase / sinonim
+ * tetap menangkap chunk yang relevan.
  */
-const RAG_DISTANCE_THRESHOLD = 0.42;
+const RAG_DISTANCE_THRESHOLD = 0.55;
+
+/**
+ * Threshold fallback (pass 2) — digunakan bila pass 1 tidak menemukan hasil.
+ * Lebih longgar agar pertanyaan pendek / ambigu masih dapat konteks.
+ */
+const RAG_FALLBACK_THRESHOLD = 0.72;
 
 /**
  * Jumlah chunk RAG yang diambil (top-k).
+ * Dinaikkan 5 → 8 agar informasi yang tersebar di banyak chunk tetap tercakup.
  */
-const RAG_TOP_K = 5;
+const RAG_TOP_K = 8;
 
 /**
  * Jumlah pesan user terakhir yang digabung sebagai query RAG.
@@ -83,8 +90,52 @@ interface ChunkCitation {
 }
 
 /**
+ * Expand + rephrase query user menjadi kalimat yang lebih deskriptif
+ * agar embedding-nya lebih dekat ke embedding chunk dokumen.
+ * Teknik ini dikenal sebagai Query Expansion / HyDE-lite.
+ */
+async function expandQuery(rawQuery: string): Promise<string> {
+    try {
+        const { text } = await generateText({
+            model: groq('llama-3.3-70b-versatile'),
+            system: `You are a search query optimizer. Your task is to rewrite and expand a user's question into a more detailed, information-rich search query that will better match relevant document chunks.
+
+Rules:
+- Rewrite the query to be more descriptive and include synonyms/related terms
+- Keep it in the SAME language as the original question
+- Output ONLY the expanded query, nothing else
+- Maximum 3 sentences
+- Do NOT answer the question, just expand/rephrase it for search purposes`,
+            prompt: `Original question: "${rawQuery}"\n\nExpanded search query:`,
+        });
+        return text.trim() || rawQuery;
+    } catch {
+        // Fallback to original query if expansion fails
+        return rawQuery;
+    }
+}
+
+/**
+ * Embed teks menggunakan Gemini embedding-2.
+ */
+async function embedText(text: string): Promise<number[]> {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const embResponse = await ai.models.embedContent({
+        model: 'gemini-embedding-2',
+        contents: text,
+    });
+    const values = embResponse.embeddings?.[0]?.values ?? [];
+    if (values.length === 0) throw new Error('Embedding kosong');
+    return values;
+}
+
+/**
  * Mengubah teks pertanyaan menjadi embedding vektor via Gemini,
  * lalu mencari top-k dokumen milik user yang paling mirip di pgvector Supabase.
+ *
+ * Strategi dua-pass:
+ *  Pass 1 (strict)  — threshold RAG_DISTANCE_THRESHOLD (0.55)
+ *  Pass 2 (fallback) — threshold RAG_FALLBACK_THRESHOLD (0.72) bila pass 1 kosong
  *
  * @returns { context, citations } — teks konteks untuk system prompt + metadata chunk untuk UI
  */
@@ -93,24 +144,23 @@ async function retrieveRelevantContext(
     userId: string
 ): Promise<{ context: string; citations: ChunkCitation[] }> {
     try {
-        // Ambil RAG_QUERY_WINDOW pesan user terakhir sebagai query embedding
+        // Ambil RAG_QUERY_WINDOW pesan user terakhir sebagai query
         const recentUserMessages = messages
             .filter(m => m.role === 'user')
             .slice(-RAG_QUERY_WINDOW)
             .map(m => m.content)
             .join('\n');
 
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-        const embResponse = await ai.models.embedContent({
-            model: 'gemini-embedding-2',
-            contents: recentUserMessages,
-        });
-        const embedding: number[] = embResponse.embeddings?.[0]?.values ?? [];
-        if (embedding.length === 0) throw new Error('Embedding kosong');
+        // 🔍 Expand query sebelum embed — lebih banyak sinyal semantik
+        const expandedQuery = await expandQuery(recentUserMessages);
+        console.log('[RAG] Expanded query:', expandedQuery.substring(0, 120));
+
+        // Embed query yang sudah diperluas
+        const embedding = await embedText(expandedQuery);
         const vectorString = `[${embedding.join(',')}]`;
 
-        // RAG Pattern 3: cari di dokumen pribadi user + semua dokumen global (admin)
-        const docs = await prisma.$queryRaw<{ content: string; distance: number }[]>`
+        // ── Pass 1: strict threshold ──
+        let docs = await prisma.$queryRaw<{ content: string; distance: number }[]>`
             SELECT content, (embedding <=> ${vectorString}::vector(3072)) AS distance
             FROM "Document"
             WHERE ("userId" = ${userId} OR "isGlobal" = true)
@@ -118,6 +168,19 @@ async function retrieveRelevantContext(
             ORDER BY distance ASC
             LIMIT ${RAG_TOP_K}
         `;
+
+        // ── Pass 2: fallback — jika pass 1 kosong, coba threshold lebih longgar ──
+        if (!docs || docs.length === 0) {
+            console.log('[RAG] Pass 1 kosong, mencoba fallback threshold', RAG_FALLBACK_THRESHOLD);
+            docs = await prisma.$queryRaw<{ content: string; distance: number }[]>`
+                SELECT content, (embedding <=> ${vectorString}::vector(3072)) AS distance
+                FROM "Document"
+                WHERE ("userId" = ${userId} OR "isGlobal" = true)
+                  AND (embedding <=> ${vectorString}::vector(3072)) < ${RAG_FALLBACK_THRESHOLD}
+                ORDER BY distance ASC
+                LIMIT ${RAG_TOP_K}
+            `;
+        }
 
         if (!docs || docs.length === 0) {
             return { context: '', citations: [] };
@@ -291,16 +354,17 @@ ATURAN PERILAKU — IKUTI DENGAN TEPAT:
    → Contoh: "Saya adalah AI chatbot yang membantu menjawab pertanyaan berdasarkan dokumen yang telah diberikan kepada saya."
 
 3. PERTANYAAN SESUAI DOKUMEN:
-   → Jawab HANYA berdasarkan KONTEKS PENGETAHUAN di bawah ini.
-   → DILARANG menambahkan informasi dari pengetahuan umum atau training data Anda.
-   → Jawab secara natural dan profesional.
+   → Jawab berdasarkan KONTEKS PENGETAHUAN di bawah ini.
+   → Gunakan SELURUH informasi yang relevan dari konteks — jangan hanya ambil sebagian.
+   → Jika jawaban tersebar di beberapa referensi, GABUNGKAN semuanya menjadi jawaban yang komprehensif.
+   → Jawab secara natural dan profesional — jangan sebut "referensi" atau "dokumen" kepada pengguna.
 
-4. PERTANYAAN DI LUAR DOKUMEN (tidak ada jawaban dalam konteks):
-   → Tolak dengan sopan: "Maaf, saya hanya dapat menjawab berdasarkan dokumen yang tersedia. Pertanyaan Anda berada di luar cakupan informasi saya."
-   → JANGAN mencoba menjawab dari pengetahuan umum.
+4. PERTANYAAN DI LUAR DOKUMEN:
+   → Jika BENAR-BENAR tidak ada informasi relevan dalam konteks, tolak dengan sopan:
+      "Maaf, saya tidak menemukan informasi terkait hal tersebut dalam basis pengetahuan saya."
+   → JANGAN menambahkan informasi dari pengetahuan umum Anda.
 
-PENTING: Jangan pernah menyebut kata "dokumen", "konteks", atau "referensi" kepada pengguna. Jawab secara natural.
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English, ikuti bahasa apapun yang user gunakan.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English.
 
 === KONTEKS PENGETAHUAN ===
 ${ragContext}
@@ -320,8 +384,8 @@ ATURAN PERILAKU:
    → "Saya adalah AI chatbot yang membantu menjawab pertanyaan berdasarkan dokumen yang telah diberikan kepada saya."
 
 3. SEMUA PERTANYAAN LAINNYA:
-   → Tidak ditemukan informasi relevan dalam basis pengetahuan.
-   → Balas: "Maaf, saya tidak menemukan informasi terkait hal tersebut. Silakan tanyakan sesuatu yang berkaitan dengan topik yang tersedia."
+   → Informasi spesifik untuk pertanyaan ini tidak ditemukan dalam basis pengetahuan.
+   → Balas dengan jujur: "Saya tidak menemukan informasi spesifik mengenai hal tersebut dalam basis pengetahuan saya. Apakah Anda bisa memberikan lebih detail atau mencoba menanyakan dengan kata-kata yang berbeda?"
    → JANGAN menjawab dari pengetahuan umum.
 
 PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.`;
