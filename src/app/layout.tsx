@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -12,9 +12,17 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  interactiveWidget: 'resizes-content',
+};
+
 export const metadata: Metadata = {
-  title: "Arise",
-  description: "AI Chatbot",
+  title: "AI Chatbot Arise",
+  description: "AI Chatbot berbasis Knowledge Base",
 };
 
 export default function RootLayout({

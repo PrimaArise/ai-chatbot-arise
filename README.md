@@ -1,54 +1,235 @@
 # AI Chatbot Arise
 
-Proyek Chatbot AI interaktif yang dibangun menggunakan **Next.js**, **Vercel AI SDK**, **Groq (LLaMA 3)**, dan **Prisma (SQLite)**. Aplikasi ini memungkinkan pengguna untuk bercakap-cakap dengan asisten virtual yang cerdas serta menyimpan riwayat percakapan secara otomatis.
-
-## Fitur Utama
-- ⚡ **Streaming Responses**: Menggunakan Vercel AI SDK dan kapabilitas Groq untuk memberikan respons AI yang mengalir dan super cepat secara *real-time*.
-- 📝 **Markdown Support**: Pesan AI dirender dengan rapi baik format teks tebal, tabel, hingga blok kode.
-- 🗄️ **Riwayat Obrolan**: Sistem obrolan berkelanjutan dengan sidebar riwayat berbasis sesi (chat room).
-- 🎨 **Modern UI**: Antarmuka modern yang dikembangkan dengan **Tailwind CSS**.
-
-## Prasyarat
-Sebelum menjalankan proyek ini secara lokal, pastikan Anda telah memiliki hal-hal di bawah ini:
-- **Node.js** (Minimal versi 18.x)
-- Akun dan **API Key Groq** (Dapatkan di [Groq Cloud](https://console.groq.com/keys))
-
-## Panduan Instalasi & Menjalankan Secara Lokal
-
-1. **Clone repository ini** (jika belum):
-   ```bash
-   git clone <URL_REPO_ANDA>
-   cd ai-chatbot-arise
-   ```
-
-2. **Instal dependensi bawaan proyek:**
-   ```bash
-   npm install
-   ```
-
-3. **Siapkan Environment Variables (.env.local):**
-   Buat file bernama `.env.local` di *root* (folder terluar) proyek, lalu salin dan isi dengan key Anda:
-   ```env
-   GROQ_API_KEY=your_groq_api_key_here
-   ```
-
-4. **Siapkan atau Reset Database Lokal (Prisma):**
-   Konfigurasi database berjalan di SQLite secara bawaan. Anda bisa menjalankan perintah ini untuk memastikan tabel terbuat sempurna:
-   ```bash
-   npx prisma generate
-   npx prisma db push
-   ```
-
-5. **Jalankan Aplikasi Mode Pengembangan (Localhost):**
-   ```bash
-   npm run dev
-   ```
-
-6. **Buka di Browser:**
-   Kunjungi [http://localhost:3000](http://localhost:3000) dan mulailah mengobrol!
+Proyek Chatbot AI interaktif yang dibangun menggunakan **Next.js**, **Vercel AI SDK**, **Groq (LLaMA 3)**, dan **Supabase PostgreSQL + pgvector**. Aplikasi ini memungkinkan pengguna bercakap-cakap dengan asisten virtual cerdas, menyimpan riwayat percakapan, dan menjawab pertanyaan berdasarkan **knowledge base** internal menggunakan teknologi **RAG (Retrieval-Augmented Generation)**.
 
 ---
 
-## 🚀 (Penting) Rencana Deployment ke Vercel
-Saat ini aplikasi masih menggunakan **SQLite** (`dev.db`). Jika ingin di-*deploy* ke platfom Vercel agar bisa online selamanya, penggunaan SQLite **tidak disarankan** karena keterbatasan filesystem *serverless*.
-Anda perlu mengalihkan file `schema.prisma` ini agar terhubung dengan [Supabase PostgreSQL](https://supabase.com) atau provider database serupa, dan mengubah variabel `DATABASE_URL`.
+## 🛠️ Tech Stack
+
+| Komponen | Teknologi |
+|---|---|
+| Framework | Next.js 15 (App Router) |
+| LLM | Groq — LLaMA 3.3 70B Versatile |
+| Embedding | Google Gemini `gemini-embedding-2` (3072 dim) |
+| Database | Supabase PostgreSQL + pgvector |
+| ORM | Prisma |
+| Auth | Supabase Auth |
+| AI SDK | Vercel AI SDK (`ai`, `@ai-sdk/groq`) |
+| Email OTP | Resend |
+| UI | Tailwind CSS, Lucide Icons, React Hot Toast |
+| Markdown | react-markdown + rehype-highlight |
+
+---
+
+## 🧠 Arsitektur RAG (Retrieval-Augmented Generation)
+
+RAG adalah teknik yang memungkinkan AI menjawab berdasarkan dokumen spesifik yang Anda simpan — bukan semata-mata dari pengetahuan bawaan model. Berikut alur kerjanya:
+
+```
+[User bertanya]
+      ↓
+[Gemini API: Ubah 3 pesan user terakhir → vektor embedding 3072 dimensi]
+      ↓
+[Supabase pgvector: Cosine Similarity Search (threshold < 0.42) → top-5 chunk]
+      ↓
+[Inject chunk sebagai "Konteks" ke dalam System Prompt]
+      ↓
+[Groq LLaMA 3: Hasilkan jawaban berbasis konteks → stream ke UI]
+      ↓
+[Frontend: Tampilkan citation card "Sumber Referensi" di bawah jawaban AI]
+```
+
+---
+
+## ✨ Fitur Utama
+
+- ⚡ **Streaming Responses** — Respons AI mengalir real-time via Vercel AI SDK & Groq
+- 🧠 **RAG Knowledge Base** — Bot menjawab dari dokumen yang Anda indeks sendiri
+- 🔀 **KB Toggle** — Aktifkan/matikan Knowledge Base langsung dari modal Kostumisasi AI; saat nonaktif, AI bebas menjawab tanpa batasan dokumen
+- 📎 **Citation Cards** — Bot menampilkan sumber referensi chunk yang dipakai untuk menjawab
+- 📝 **Markdown Support** — Pesan AI dirender rapi (teks tebal, tabel, blok kode dengan syntax highlight)
+- 🗄️ **Riwayat Obrolan** — Sidebar riwayat chat berbasis sesi per pengguna, dengan search dan rename
+- 🔐 **Autentikasi** — Login & Register aman menggunakan Supabase Auth
+- 🗂️ **Kelola Knowledge Base** — Upload PDF/TXT/MD, edit chunk, hapus satu atau massal
+- 🤖 **AI Title Generator** — Judul chat di-generate otomatis oleh AI saat percakapan baru dimulai
+- 📤 **Export Chat** — Ekspor riwayat percakapan ke file `.txt`
+- 📊 **Dashboard Statistik** — Lihat total chat, pesan, dan aktivitas 7 hari terakhir
+- 🛡️ **Role System** — Admin dapat upload dokumen global (berlaku untuk semua user)
+- 🔑 **OTP Admin Promotion** — Promosi ke role Admin via kode OTP 6-digit yang dikirim ke email admin
+- ⏱️ **Rate Limiting** — Pembatasan 20 request/menit per user untuk mencegah penyalahgunaan
+- 🌐 **Responsif** — Antarmuka modern dark-mode yang nyaman di desktop & mobile
+
+---
+
+## ⏱️ Rate Limiting
+
+API chat dilindungi oleh **in-memory rate limiter**:
+
+| Parameter | Nilai |
+|---|---|
+| Maksimum request | 20 per menit |
+| Per | User ID (Supabase) |
+| Window | 60 detik (sliding) |
+| Response saat limit | HTTP `429` + pesan waktu reset dalam detik |
+
+> **Catatan**: Rate limiter ini berbasis in-memory dan akan reset saat server restart. Untuk deployment multi-instance (misalnya Vercel dengan banyak serverless function), gunakan **Upstash Redis** sebagai pengganti.
+
+---
+
+## 🔐 Sistem Autentikasi & Role
+
+### Role User
+- **User (default)** — Dapat chat, upload dokumen pribadi, kelola knowledge base milik sendiri
+- **Admin** — Semua akses User + upload dokumen global (berlaku untuk semua user) + lihat statistik seluruh sistem
+
+### Promosi ke Admin (OTP Flow)
+1. User klik **Role: User** di sidebar → klik **Kirim Permintaan ke Admin**
+2. Sistem mengirim kode OTP 6-digit ke email admin (`ADMIN_INVITE_EMAIL`) via Resend
+3. Admin membagikan kode OTP ke user yang bersangkutan
+4. User memasukkan kode OTP → role berubah menjadi Admin
+5. OTP berlaku **10 menit** dan hanya bisa digunakan sekali (single-use)
+
+---
+
+## 🔀 Fitur Toggle Knowledge Base
+
+Di modal **Kostumisasi AI**, terdapat toggle untuk mengaktifkan/mematikan Knowledge Base:
+
+| Status | Perilaku AI |
+|---|---|
+| **KB Aktif** (default) | AI menjawab **hanya** berdasarkan dokumen yang diindeks. Pertanyaan di luar dokumen ditolak dengan sopan. |
+| **KB Nonaktif** | AI bebas menjawab dari pengetahuan umum tanpa batasan dokumen. Berguna saat belum ada dokumen atau ingin chat bebas. |
+
+---
+
+## Prasyarat
+
+Sebelum menjalankan proyek ini secara lokal, pastikan Anda telah memiliki:
+- **Node.js** (Minimal versi 18.x)
+- Akun **Groq Cloud** → [console.groq.com/keys](https://console.groq.com/keys)
+- Akun **Google AI Studio** untuk Gemini API → [aistudio.google.com](https://aistudio.google.com)
+- Akun **Supabase** dengan ekstensi `vector (pgvector)` aktif
+- Akun **Resend** (untuk fitur OTP email) → [resend.com](https://resend.com)
+
+---
+
+## Panduan Instalasi & Menjalankan Secara Lokal
+
+### 1. Clone & Install Dependensi
+```bash
+git clone <URL_REPO_ANDA>
+cd ai-chatbot-arise
+npm install
+```
+
+### 2. Siapkan Environment Variables
+
+Buat file `.env.local` di *root* proyek:
+```env
+# ── LLM (Groq) ──
+GROQ_API_KEY=your_groq_api_key_here
+
+# ── Embedding (Gemini) ──
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# ── Supabase Auth ──
+NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key_here
+
+# ── Admin OTP Email ──
+ADMIN_INVITE_EMAIL=email_admin_anda@gmail.com
+
+# ── Resend (pengiriman OTP via email) ──
+RESEND_API_KEY=re_your_resend_api_key_here
+RESEND_FROM_EMAIL=onboarding@resend.dev
+```
+
+Buat juga file `.env` untuk Prisma CLI (database connection):
+```env
+DATABASE_URL="postgresql://postgres.<project-ref>:<password>@<host>:6543/postgres?pgbouncer=true"
+DIRECT_URL="postgresql://postgres.<project-ref>:<password>@<host>:5432/postgres"
+```
+
+### 3. Aktifkan pgvector di Supabase
+
+Di dashboard Supabase, buka **Database → Extensions** dan aktifkan ekstensi `vector`.
+
+### 4. Sinkronisasi Skema Database (Prisma)
+
+```bash
+npx prisma db push
+```
+
+Perintah ini akan membuat tabel `Chat`, `Message`, `User`, `Document`, dan `PromoteToken` di Supabase.
+
+### 5. Jalankan Aplikasi
+
+```bash
+npm run dev
+```
+
+Buka [http://localhost:3000](http://localhost:3000) di browser.
+
+---
+
+## 📤 Mengisi Knowledge Base (Ingestion)
+
+Gunakan UI bawaan — klik tombol **⚙️ Kostumisasi AI** di sidebar:
+- **Tab "Upload Dokumen"**: Upload file `.pdf`, `.txt`, atau `.md`. Sistem otomatis memotong teks menjadi chunk ~400 token dengan 80-token overlap dan mengindeks embedding ke Supabase.
+- **Tab "Kelola Chunks"**: Lihat, edit, hapus satu atau banyak chunk sekaligus.
+
+Atau via `curl` (mode developer):
+```bash
+curl -X POST http://localhost:3000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Arise adalah asisten AI yang dikembangkan untuk membantu mahasiswa..."}'
+```
+
+---
+
+## 🔄 Alur Chat dengan RAG
+
+Setiap kali pengguna mengirim pesan:
+1. **KB Check**: Sistem cek apakah Knowledge Base aktif (toggle) dan apakah dokumen tersedia
+2. **Query Window**: 3 pesan user terakhir digabung sebagai query embedding agar konteks tidak hilang
+3. **Embedding**: Query diubah menjadi vektor 3072 dimensi oleh Gemini API
+4. **Retrieval**: Supabase mencari top-5 chunk dengan jarak cosine `< 0.42`
+5. **Inject Context**: Chunk relevan disuntikkan ke System Prompt Groq
+6. **Streaming**: Groq menghasilkan jawaban dan di-stream real-time ke UI
+7. **Citations**: Frontend menampilkan card **"Sumber Referensi"** di bawah pesan AI
+8. **Token Guard**: History dibatasi maksimal 10 pesan ke Groq untuk mencegah token bloat
+
+---
+
+## 🔍 Parameter RAG (dapat dikonfigurasi di `src/app/api/chat/route.ts`)
+
+| Konstanta | Default | Keterangan |
+|-----------|---------|------------|
+| `MAX_HISTORY_MESSAGES` | `10` | Maks pesan dikirim ke LLM (token bloat guard) |
+| `RAG_DISTANCE_THRESHOLD` | `0.42` | Maks cosine distance dianggap relevan (lebih kecil = lebih ketat) |
+| `RAG_TOP_K` | `5` | Jumlah chunk terbaik yang diambil |
+| `RAG_QUERY_WINDOW` | `3` | Jumlah pesan user terakhir sebagai query embedding |
+
+---
+
+## 🚀 Deployment ke Vercel
+
+1. Push kode ke GitHub
+2. Import repository di [vercel.com](https://vercel.com)
+3. Tambahkan semua environment variables di **Settings → Environment Variables**:
+
+| Variable | Environment |
+|---|---|
+| `GROQ_API_KEY` | Production + Preview |
+| `GEMINI_API_KEY` | Production + Preview |
+| `NEXT_PUBLIC_SUPABASE_URL` | Production + Preview |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Production + Preview |
+| `DATABASE_URL` | Production + Preview |
+| `DIRECT_URL` | Production + Preview |
+| `ADMIN_INVITE_EMAIL` | Production + Preview |
+| `RESEND_API_KEY` | Production + Preview |
+| `RESEND_FROM_EMAIL` | Production + Preview |
+
+4. Deploy!
+
+> **Catatan**: Proyek ini sudah melewati full ESLint + TypeScript check tanpa error. Build Vercel berjalan tanpa flag `ignoreDuringBuilds`.
