@@ -1292,70 +1292,70 @@ function ChatComponent() {
 
       {/* ===== Kostumisasi AI Modal ===== */}
       {isKostumiModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl shadow-2xl flex flex-col max-h-[88dvh] sm:max-h-[85dvh]">
             {/* Header */}
-            <div className="flex items-center justify-between p-5 border-b border-neutral-800 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center">
-                  <Settings size={18} />
+            <div className="flex items-center justify-between p-3 sm:p-5 border-b border-neutral-800 shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center shrink-0">
+                  <Settings size={16} />
                 </div>
                 <div>
-                  <h2 className="text-base font-semibold text-white">Kostumisasi AI</h2>
-                  <p className="text-xs text-neutral-500">Kelola knowledge base Arise</p>
+                  <h2 className="text-sm sm:text-base font-semibold text-white">Kostumisasi AI</h2>
+                  <p className="text-[10px] sm:text-xs text-neutral-500 hidden sm:block">Kelola knowledge base Arise</p>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 mr-2 bg-neutral-950 px-3 py-1.5 rounded-lg border border-neutral-800" title={isKbEnabled ? 'AI hanya menjawab dari dokumen' : 'AI bebas menjawab tanpa batasan dokumen'}>
-                  <span className={`text-xs font-medium ${isKbEnabled ? 'text-blue-400' : 'text-neutral-500'}`}>
-                    Knowledge Base {isKbEnabled ? 'ON' : 'OFF'}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-neutral-950 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg border border-neutral-800" title={isKbEnabled ? 'AI hanya menjawab dari dokumen' : 'AI bebas menjawab tanpa batasan dokumen'}>
+                  <span className={`text-[10px] sm:text-xs font-medium whitespace-nowrap ${isKbEnabled ? 'text-blue-400' : 'text-neutral-500'}`}>
+                    <span className="hidden sm:inline">Knowledge Base </span><span className="sm:hidden">KB </span>{isKbEnabled ? 'ON' : 'OFF'}
                   </span>
                   <button
                     onClick={() => setIsKbEnabled(!isKbEnabled)}
-                    className={`relative w-8 h-4 rounded-full transition-colors cursor-pointer ${isKbEnabled ? 'bg-blue-600' : 'bg-neutral-700'}`}
+                    className={`relative w-7 h-3.5 sm:w-8 sm:h-4 rounded-full transition-colors cursor-pointer ${isKbEnabled ? 'bg-blue-600' : 'bg-neutral-700'}`}
                   >
-                    <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${isKbEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                    <div className={`absolute top-0.5 left-0.5 w-2.5 h-2.5 sm:w-3 sm:h-3 bg-white rounded-full transition-transform ${isKbEnabled ? 'translate-x-3 sm:translate-x-4' : 'translate-x-0'}`} />
                   </button>
                 </div>
                 <button
                   onClick={() => setIsKostumiModal(false)}
-                  className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
+                  className="p-1.5 sm:p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
                 >
-                  <X size={18} />
+                  <X size={16} />
                 </button>
               </div>
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-neutral-800 shrink-0 px-5 pt-3">
+            <div className="flex border-b border-neutral-800 shrink-0 px-3 sm:px-5 pt-2 sm:pt-3">
               <button
                 onClick={() => setKostumiTab('upload')}
-                className={`flex items-center gap-2 pb-3 px-1 mr-6 text-sm font-medium border-b-2 transition-colors cursor-pointer ${kostumiTab === 'upload'
+                className={`flex items-center gap-1.5 sm:gap-2 pb-2.5 sm:pb-3 px-1 mr-4 sm:mr-6 text-xs sm:text-sm font-medium border-b-2 transition-colors cursor-pointer ${kostumiTab === 'upload'
                   ? 'border-blue-500 text-blue-400'
                   : 'border-transparent text-neutral-500 hover:text-neutral-300'
                   }`}
               >
-                <Upload size={14} />
-                Upload Dokumen
+                <Upload size={13} />
+                Upload
               </button>
               <button
                 onClick={() => { setKostumiTab('chunks'); loadChunks(); }}
-                className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors cursor-pointer ${kostumiTab === 'chunks'
+                className={`flex items-center gap-1.5 sm:gap-2 pb-2.5 sm:pb-3 px-1 text-xs sm:text-sm font-medium border-b-2 transition-colors cursor-pointer ${kostumiTab === 'chunks'
                   ? 'border-blue-500 text-blue-400'
                   : 'border-transparent text-neutral-500 hover:text-neutral-300'
                   }`}
               >
-                <FileText size={14} />
+                <FileText size={13} />
                 Kelola Chunks
                 {chunks.length > 0 && (() => {
                   const groupCount = new Set(chunks.map(c => c.source)).size;
-                  return <span className="bg-neutral-700 text-neutral-300 text-xs px-1.5 py-0.5 rounded-full">{groupCount}</span>;
+                  return <span className="bg-neutral-700 text-neutral-300 text-[10px] px-1.5 py-0.5 rounded-full">{groupCount}</span>;
                 })()}
               </button>
             </div>
 
             {/* Content */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-5">
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5">
 
               {/* === Tab Upload === */}
               {kostumiTab === 'upload' && (
@@ -1396,8 +1396,8 @@ function ChatComponent() {
                     value={uploadText}
                     onChange={(e) => { setUploadText(e.target.value); setUploadFile(null); }}
                     placeholder="Atau tempel konten dokumen Anda di sini..."
-                    rows={7}
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-blue-500/60 resize-none transition-colors"
+                    rows={5}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-3 sm:p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-blue-500/60 resize-none transition-colors"
                   />
 
                   {/* Grup Selector — hanya tampil untuk input teks manual (bukan file) */}
@@ -1442,22 +1442,22 @@ function ChatComponent() {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-xs text-neutral-600">
                       {uploadFile
                         ? uploadFile.name.endsWith('.pdf')
-                          ? `PDF siap dikirim (${(uploadFile.size / 1024).toFixed(1)} KB)`
+                          ? `PDF (${(uploadFile.size / 1024).toFixed(1)} KB)`
                           : `${uploadText.trim().split(/\s+/).filter(Boolean).length} kata`
                         : `${uploadText.trim().split(/\s+/).filter(Boolean).length} kata`
                       }
                     </span>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       {/* Toggle Global/Pribadi — hanya tampil untuk admin (berlaku untuk file DAN teks) */}
                       {isAdmin && (
                         <button
                           type="button"
                           onClick={() => setIsGlobalUpload(v => !v)}
-                          className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer ${isGlobalUpload
+                          className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded-lg border transition-all cursor-pointer ${isGlobalUpload
                             ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                             : 'bg-neutral-800 border-neutral-700 text-neutral-500 hover:text-neutral-300'
                             }`}
@@ -1470,12 +1470,12 @@ function ChatComponent() {
                       <button
                         onClick={handleIngest}
                         disabled={isIngesting || (!uploadText.trim() && !uploadFile)}
-                        className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors cursor-pointer"
+                        className="flex items-center gap-1.5 px-3 sm:px-5 py-2 sm:py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs sm:text-sm font-medium rounded-xl transition-colors cursor-pointer"
                       >
                         {isIngesting ? (
-                          <><Loader2 size={14} className="animate-spin" /> Memproses...</>
+                          <><Loader2 size={13} className="animate-spin" /> Memproses...</>
                         ) : (
-                          <><Upload size={14} /> Indeks ke Knowledge Base</>
+                          <><Upload size={13} /><span className="hidden sm:inline">Indeks ke </span>Knowledge Base</>
                         )}
                       </button>
                     </div>
