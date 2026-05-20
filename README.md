@@ -45,19 +45,20 @@ RAG adalah teknik yang memungkinkan AI menjawab berdasarkan dokumen spesifik yan
 
 - ⚡ **Streaming Responses** — Respons AI mengalir real-time via Vercel AI SDK & Groq
 - 🧠 **RAG Knowledge Base** — Bot menjawab dari dokumen yang Anda indeks sendiri
-- 🔀 **KB Toggle** — Aktifkan/matikan Knowledge Base langsung dari modal Kostumisasi AI; saat nonaktif, AI bebas menjawab tanpa batasan dokumen
+- 🔀 **KB Toggle** — Aktifkan/matikan Knowledge Base langsung dari modal Kostumisasi AI
 - 📎 **Citation Cards** — Bot menampilkan sumber referensi chunk yang dipakai untuk menjawab
 - 📝 **Markdown Support** — Pesan AI dirender rapi (teks tebal, tabel, blok kode dengan syntax highlight)
 - 🗄️ **Riwayat Obrolan** — Sidebar riwayat chat berbasis sesi per pengguna, dengan search dan rename
-- 🔐 **Autentikasi** — Login & Register aman menggunakan Supabase Auth
-- 🗂️ **Kelola Knowledge Base** — Upload PDF/TXT/MD, edit chunk, hapus satu atau massal
+- 🔐 **Autentikasi Lengkap** — Login, Register, **Lupa Password**, dan **Reset Password** via Supabase Auth
+- 🗂️ **Document Groups** — Chunk dikelompokkan per grup; rename inline, tambah chunk baru ke grup, hapus grup sekaligus
+- ⚡ **Parallel Embedding** — Proses embedding dilakukan 5 concurrent; ingestion 3–5× lebih cepat
 - 🤖 **AI Title Generator** — Judul chat di-generate otomatis oleh AI saat percakapan baru dimulai
 - 📤 **Export Chat** — Ekspor riwayat percakapan ke file `.txt`
 - 📊 **Dashboard Statistik** — Lihat total chat, pesan, dan aktivitas 7 hari terakhir
-- 🛡️ **Role System** — Admin dapat upload dokumen global (berlaku untuk semua user)
+- 🛡️ **Role System** — Admin dapat upload dokumen global (amber 🟡) vs pribadi (biru 🔵), dengan warna ikon berbeda
 - 🔑 **OTP Admin Promotion** — Promosi ke role Admin via kode OTP 6-digit yang dikirim ke email admin
 - ⏱️ **Rate Limiting** — Pembatasan 20 request/menit per user untuk mencegah penyalahgunaan
-- 🌐 **Responsif** — Antarmuka modern dark-mode yang nyaman di desktop & mobile
+- 📱 **Mobile Responsive** — Modal Kostumisasi AI, halaman auth, dan dashboard dioptimalkan untuk layar kecil
 
 ---
 
@@ -175,8 +176,8 @@ Buka [http://localhost:3000](http://localhost:3000) di browser.
 ## 📤 Mengisi Knowledge Base (Ingestion)
 
 Gunakan UI bawaan — klik tombol **⚙️ Kostumisasi AI** di sidebar:
-- **Tab "Upload Dokumen"**: Upload file `.pdf`, `.txt`, atau `.md`. Sistem otomatis memotong teks menjadi chunk ~400 token dengan 80-token overlap dan mengindeks embedding ke Supabase.
-- **Tab "Kelola Chunks"**: Lihat, edit, hapus satu atau banyak chunk sekaligus.
+- **Tab "Upload"**: Upload file `.pdf`, `.txt`, atau `.md`. Tentukan nama grup (baru atau yang sudah ada). Sistem otomatis memotong teks menjadi chunk ~400 token dengan 80-token overlap, lalu mengindeks embedding ke Supabase secara **paralel (5 concurrent)**.
+- **Tab "Kelola Chunks"**: Chunk dikelompokkan dalam **Grup Dokumen**. Tersedia fitur expand grup, rename grup, tambah chunk baru ke grup, hapus grup, edit chunk, dan bulk delete. Ikon amber 🟡 = Global, biru 🔵 = Pribadi.
 
 Atau via `curl` (mode developer):
 ```bash
@@ -233,3 +234,11 @@ Setiap kali pengguna mengirim pesan:
 4. Deploy!
 
 > **Catatan**: Proyek ini sudah melewati full ESLint + TypeScript check tanpa error. Build Vercel berjalan tanpa flag `ignoreDuringBuilds`.
+
+### Setup Reset Password (Supabase)
+
+Tambahkan URL berikut ke **Supabase Dashboard → Authentication → URL Configuration → Redirect URLs**:
+```
+https://natbot.vercel.app/reset-password
+```
+Tanpa konfigurasi ini, link reset password di email tidak akan bekerja.
