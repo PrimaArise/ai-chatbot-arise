@@ -49,3 +49,37 @@ body {
   background: #404040;
   /* Warna pegangan saat kursor diarahkan ke sana */
 }
+
+/* ===== Mobile Enhancements ===== */
+
+/* Sembunyikan scrollbar di layar sentuh — user scroll dengan swipe */
+@media (pointer: coarse) {
+  ::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+}
+
+/* Cegah iOS zoom saat tap input — font-size minimal 16px */
+input,
+textarea,
+select {
+  font-size: max(16px, 1em);
+}
+
+/* Smooth scroll untuk semua elemen scrollable */
+* {
+  scroll-behavior: smooth;
+}
+
+/* Prevent tap highlight di mobile */
+button, a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Pastikan body tidak overflow di mobile */
+html, body {
+  overflow: hidden;
+  height: 100%;
+  height: -webkit-fill-available;
+}

@@ -159,41 +159,53 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // ============================================================
 async function ingestDocument(rawText: string, source: string, userId: string, isGlobal: boolean): Promise<{ chunks: ChunkResult[]; inserted: number; skipped: number }> {
     const chunks = chunkDocument(rawText, source);
+    const CONCURRENCY = 5; // max parallel Gemini API calls
 
     let inserted = 0;
     let skipped = 0;
 
-    for (const chunk of chunks) {
+    // Helper: proses satu chunk (embed + insert)
+    async function processChunk(chunk: ChunkResult): Promise<'inserted' | 'skipped'> {
         const embedding = await generateEmbedding(chunk.text);
         const vectorString = `[${embedding.join(',')}]`;
-
-        // Prevent duplicate chunks: skip jika konten yang SAMA PERSIS sudah ada
-        // untuk userId yang sama (personal) atau sebagai dokumen global
         const rowsAffected = await prisma.$executeRaw`
-            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", "isGlobal")
+            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", "isGlobal", source)
             SELECT
                 gen_random_uuid()::text,
                 ${chunk.text},
                 ${vectorString}::vector(3072),
                 NOW(),
                 ${userId},
-                ${isGlobal}
+                ${isGlobal},
+                ${source}
             WHERE NOT EXISTS (
                 SELECT 1 FROM "Document"
                 WHERE content = ${chunk.text}
                   AND "userId" = ${userId}
             )
         `;
+        return rowsAffected > 0 ? 'inserted' : 'skipped';
+    }
 
-        if (rowsAffected > 0) {
-            inserted++;
-        } else {
-            skipped++;
+    // Proses dalam batch paralel (concurrency = CONCURRENCY)
+    for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+        const batch = chunks.slice(i, i + CONCURRENCY);
+        const results = await Promise.allSettled(batch.map(c => processChunk(c)));
+        for (const r of results) {
+            if (r.status === 'fulfilled') {
+                if (r.value === 'inserted') inserted++;
+                else skipped++;
+            } else {
+                // Jika satu chunk gagal embed, lewati tapi jangan crash keseluruhan
+                console.warn('[ingest] chunk gagal diproses:', r.reason);
+                skipped++;
+            }
         }
     }
 
     return { chunks, inserted, skipped };
 }
+
 
 // ============================================================
 // POST /api/ingest

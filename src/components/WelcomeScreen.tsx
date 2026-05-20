@@ -1,4 +1,5 @@
 import { Send, Sparkles } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 
 interface WelcomeScreenProps {
   input: string;
@@ -17,16 +18,20 @@ const SUGGESTED_QUESTIONS = [
 ];
 
 export default function WelcomeScreen({ input, handleInputChange, handleSubmit, setInput }: WelcomeScreenProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    // Focus setelah mount (client-only) — menghindari hydration mismatch
+    textareaRef.current?.focus();
+  }, []);
+
   const handleBubbleClick = (question: string) => {
     setInput(question);
-    // Fokus textarea setelah memilih pertanyaan
     setTimeout(() => {
-      const ta = document.querySelector<HTMLTextAreaElement>('textarea');
-      if (ta) {
-        ta.focus();
-        // Trigger auto-resize
-        ta.style.height = 'auto';
-        ta.style.height = `${ta.scrollHeight}px`;
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.style.height = 'auto';
+        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
       }
     }, 0);
   };
@@ -92,24 +97,22 @@ export default function WelcomeScreen({ input, handleInputChange, handleSubmit, 
           
           {/* Textarea kustom: Bisa memanjang ke bawah otomatis dan mentolerir tombol Enter */}
           <textarea
+            ref={textareaRef}
             className="flex-1 p-4 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none text-lg resize-none min-h-[60px] max-h-[200px] overflow-y-auto"
             value={input}
             placeholder="Ketik Sesuatu..."
             onChange={handleInputChange}
-            autoFocus
             rows={1}
-            // onInput: Menghitung secara dinamis seberapa panjang teks, lalu mengubah tinggi (height) elemen
             onInput={(e) => {
               const target = e.target as HTMLTextAreaElement;
               target.style.height = 'auto';
               target.style.height = `${target.scrollHeight}px`;
             }}
-            // onKeyDown: Mengirim form saat Enter ditekan (tanpa menahan Shift)
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault(); // Cegah fungsi bawaan Enter (ganti baris)
+                e.preventDefault();
                 if (input.trim()) {
-                  e.currentTarget.form?.requestSubmit(); // Lemparkan eksekusi ke onSubmit form
+                  e.currentTarget.form?.requestSubmit();
                 }
               }
             }}

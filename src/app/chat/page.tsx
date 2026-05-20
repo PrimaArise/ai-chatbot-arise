@@ -7,7 +7,7 @@ import { useChat } from '@ai-sdk/react';
 import { useEffect, useRef, useState, memo, Suspense, FormEvent, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Shield, User, Search, Download, RefreshCw, BarChart2 } from 'lucide-react';
+import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Shield, User, Search, Download, RefreshCw, BarChart2, Pencil } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
@@ -143,7 +143,7 @@ function ChatComponent() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isIngesting, setIsIngesting] = useState(false);
   const [ingestResult, setIngestResult] = useState<string | null>(null);
-  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; isGlobal: boolean; userId: string }[]>([]);
+  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; isGlobal: boolean; userId: string; source: string }[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
   const [deletingChunkId, setDeletingChunkId] = useState<string | null>(null);
   const [expandedChunkId, setExpandedChunkId] = useState<string | null>(null);
@@ -157,6 +157,27 @@ function ChatComponent() {
   const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+
+  // ===== Grouping state =====
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const [deletingGroupSource, setDeletingGroupSource] = useState<string | null>(null);
+  const [showGroupDeleteConfirm, setShowGroupDeleteConfirm] = useState<string | null>(null);
+
+  // ===== Rename group state =====
+  const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
+  const [renameGroupValue, setRenameGroupValue] = useState('');
+  const [isRenamingGroup, setIsRenamingGroup] = useState(false);
+
+  // ===== Add chunk to group state =====
+  const [addChunkGroup, setAddChunkGroup] = useState<string | null>(null);
+  const [addChunkContent, setAddChunkContent] = useState('');
+  const [isAddingChunk, setIsAddingChunk] = useState(false);
+  const [showNewGroupModal, setShowNewGroupModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+
+  // ===== Upload source (manual text) =====
+  const [uploadSourceMode, setUploadSourceMode] = useState<'existing' | 'new'>('new');
+  const [uploadSourceName, setUploadSourceName] = useState('');
 
   // ===== User role (admin/user) =====
   const [userRole, setUserRole] = useState<'admin' | 'user'>('user');
@@ -548,7 +569,6 @@ function ChatComponent() {
       try {
         const formData = new FormData();
         formData.append('file', uploadFile);
-        // Admin: kirim isGlobal flag agar server bisa set dokumen sebagai global
         if (isAdmin) formData.append('isGlobal', String(isGlobalUpload));
         const res = await fetch('/api/ingest', { method: 'POST', body: formData });
         const data = await res.json();
@@ -566,21 +586,21 @@ function ChatComponent() {
       setIsIngesting(false);
       return;
     }
-    // Mode teks manual (JSON)
+    // Mode teks manual — gunakan source dari uploadSourceName atau 'manual-input'
     if (!uploadText.trim()) { toast.error('Masukkan teks terlebih dahulu'); return; }
+    const resolvedSource = uploadSourceName.trim() || 'manual-input';
     setIsIngesting(true);
     setIngestResult(null);
     try {
       const res = await fetch('/api/ingest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: uploadText, isGlobal: isAdmin && isGlobalUpload }),
+        body: JSON.stringify({ content: uploadText, source: resolvedSource, isGlobal: isAdmin && isGlobalUpload }),
       });
-
       const data = await res.json();
       if (res.ok) {
         const skipInfo2 = data.skipped > 0 ? ` (${data.skipped} duplikat dilewati)` : '';
-        setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke knowledge base${isAdmin && isGlobalUpload ? ' (Global 🌐)' : isAdmin ? ' (Pribadi 🔒)' : ''}${skipInfo2}.`);
+        setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke grup "${resolvedSource}"${isAdmin && isGlobalUpload ? ' (Global 🌐)' : ''}${skipInfo2}.`);
         setUploadText('');
         setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -592,16 +612,28 @@ function ChatComponent() {
     setIsIngesting(false);
   };
 
-  // Hapus satu chunk dokumen dari knowledge base
-  const handleDeleteChunk = async (id: string) => {
-    setDeletingChunkId(id);
-    try {
-      await fetch(`/api/documents?id=${id}`, { method: 'DELETE' });
-      setChunks(prev => prev.filter(c => c.id !== id));
-      setSelectedChunkIds(prev => { const n = new Set(prev); n.delete(id); return n; });
-      toast.success('Chunk berhasil dihapus');
-    } catch { toast.error('Gagal menghapus chunk'); }
-    setDeletingChunkId(null);
+  // Hapus satu chunk — optimistic (langsung update UI, fetch di background)
+  const handleDeleteChunk = (id: string) => {
+    // Simpan backup untuk rollback
+    const backup = chunks.find(c => c.id === id);
+    // Update UI instan
+    setChunks(prev => prev.filter(c => c.id !== id));
+    setSelectedChunkIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+    // Fire-and-forget ke server
+    fetch(`/api/documents?id=${id}`, { method: 'DELETE' })
+      .then(res => {
+        if (res.ok) {
+          toast.success('Chunk berhasil dihapus');
+        } else {
+          // Rollback
+          if (backup) setChunks(prev => [...prev, backup].sort((a, b) => a.source.localeCompare(b.source)));
+          toast.error('Gagal menghapus chunk');
+        }
+      })
+      .catch(() => {
+        if (backup) setChunks(prev => [...prev, backup]);
+        toast.error('Gagal menghapus chunk');
+      });
   };
 
   // Toggle seleksi satu chunk untuk operasi bulk delete
@@ -609,6 +641,21 @@ function ChatComponent() {
     setSelectedChunkIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Toggle pilih semua / batal pilih semua chunk dalam satu grup
+  const toggleSelectGroup = (groupChunks: typeof chunks) => {
+    const groupIds = new Set(groupChunks.map(c => c.id));
+    const allSelected = groupChunks.every(c => selectedChunkIds.has(c.id));
+    setSelectedChunkIds(prev => {
+      const next = new Set(prev);
+      if (allSelected) {
+        groupIds.forEach(id => next.delete(id));
+      } else {
+        groupIds.forEach(id => next.add(id));
+      }
       return next;
     });
   };
@@ -622,29 +669,124 @@ function ChatComponent() {
     }
   };
 
-  // Hapus semua chunk yang dipilih secara massal via API
-  const handleBulkDelete = async () => {
-    if (selectedChunkIds.size === 0) return;
-    setIsBulkDeleting(true);
-    try {
-      const ids = Array.from(selectedChunkIds);
-      const res = await fetch('/api/documents', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
+  // Hapus seluruh grup — optimistic
+  const handleDeleteGroup = (source: string) => {
+    const backupChunks = chunks.filter(c => c.source === source);
+    // Update UI instan
+    setChunks(prev => prev.filter(c => c.source !== source));
+    setSelectedChunkIds(prev => {
+      const next = new Set(prev);
+      backupChunks.forEach(c => next.delete(c.id));
+      return next;
+    });
+    if (expandedGroupId === source) setExpandedGroupId(null);
+    setShowGroupDeleteConfirm(null);
+    toast.success(`Grup "${source}" dihapus`);
+    // Fire-and-forget
+    fetch(`/api/documents?source=${encodeURIComponent(source)}`, { method: 'DELETE' })
+      .catch(() => {
+        // Rollback
+        setChunks(prev => [...prev, ...backupChunks]);
+        toast.error('Gagal menghapus grup — data dikembalikan');
       });
-      if (res.ok) {
-        setChunks(prev => prev.filter(c => !selectedChunkIds.has(c.id)));
-        setSelectedChunkIds(new Set());
-        toast.success(`${ids.length} chunk berhasil dihapus`);
-      } else {
-        const data = await res.json();
-        toast.error(data.error || 'Gagal menghapus chunk');
-      }
-    } catch { toast.error('Gagal menghapus chunk'); }
-    setIsBulkDeleting(false);
-    setShowBulkDeleteConfirm(false);
+    setDeletingGroupSource(null);
   };
+
+  // Rename grup
+  const handleRenameGroup = async (oldSource: string) => {
+    const newSource = renameGroupValue.trim();
+    if (!newSource) { toast.error('Nama grup tidak boleh kosong'); return; }
+    if (newSource === oldSource) { setRenamingGroup(null); return; }
+    setIsRenamingGroup(true);
+    try {
+      const res = await fetch(`/api/documents?renameGroup=${encodeURIComponent(oldSource)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newSource }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setChunks(prev => prev.map(c => c.source === oldSource ? { ...c, source: newSource } : c));
+        if (expandedGroupId === oldSource) setExpandedGroupId(newSource);
+        setRenamingGroup(null);
+        toast.success(`Grup direname menjadi "${newSource}"`);
+      } else {
+        toast.error(data.error || 'Gagal rename grup');
+      }
+    } catch { toast.error('Gagal rename grup'); }
+    setIsRenamingGroup(false);
+  };
+
+  // Tambah chunk manual ke grup yang ada
+  const handleAddChunkToGroup = async (source: string, isGlobalGroup: boolean) => {
+    if (!addChunkContent.trim()) { toast.error('Konten tidak boleh kosong'); return; }
+    setIsAddingChunk(true);
+    try {
+      const res = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: addChunkContent.trim(), source, isGlobal: isGlobalGroup }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Chunk ditambahkan ke grup "${source}"`);
+        setAddChunkContent('');
+        setAddChunkGroup(null);
+        loadChunks();
+      } else {
+        toast.error(data.error || 'Gagal menambahkan chunk');
+      }
+    } catch { toast.error('Gagal menambahkan chunk'); }
+    setIsAddingChunk(false);
+  };
+
+  // Tambah chunk ke grup baru (belum ada)
+  const handleAddNewGroup = async () => {
+    if (!newGroupName.trim()) { toast.error('Nama grup tidak boleh kosong'); return; }
+    if (!addChunkContent.trim()) { toast.error('Konten chunk tidak boleh kosong'); return; }
+    setIsAddingChunk(true);
+    try {
+      const res = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: addChunkContent.trim(), source: newGroupName.trim(), isGlobal: isAdmin && isGlobalUpload }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Chunk ditambahkan ke grup "${newGroupName.trim()}"`);
+        setAddChunkContent('');
+        setNewGroupName('');
+        setShowNewGroupModal(false);
+        loadChunks();
+      } else {
+        toast.error(data.error || 'Gagal menambahkan chunk');
+      }
+    } catch { toast.error('Gagal menambahkan chunk'); }
+    setIsAddingChunk(false);
+  };
+
+  // Hapus massal — optimistic
+  const handleBulkDelete = () => {
+    if (selectedChunkIds.size === 0) return;
+    const ids = Array.from(selectedChunkIds);
+    const backupChunks = chunks.filter(c => ids.includes(c.id));
+    // Update UI instan
+    setChunks(prev => prev.filter(c => !selectedChunkIds.has(c.id)));
+    setSelectedChunkIds(new Set());
+    setShowBulkDeleteConfirm(false);
+    toast.success(`${ids.length} chunk dihapus`);
+    // Fire-and-forget
+    fetch('/api/documents', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }).catch(() => {
+      // Rollback
+      setChunks(prev => [...prev, ...backupChunks]);
+      toast.error('Gagal menghapus — data dikembalikan');
+    });
+  };
+
 
   // Buka mode edit untuk satu chunk — memuat konten ke textarea
   const openEditChunk = (chunk: { id: string; content: string }) => {
@@ -681,14 +823,26 @@ function ChatComponent() {
   const isChatEmpty = !ruanganId || messages.length === 0;
 
   return (
-    <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
+    <div className="flex h-dvh bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       <Toaster position="top-center" toastOptions={{ style: { background: '#262626', color: '#fff', border: '1px solid #404040' } }} />
-      {/* Sidebar */}
+
+      {/* Mobile Backdrop — tutup sidebar saat tap di luar */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden"
+          onClick={toggleSidebar}
+        />
+      )}
+
+      {/* Sidebar — overlay di mobile, push layout di desktop */}
       <div
-        className={`${isSidebarOpen ? 'w-64' : 'w-0'
-          } bg-neutral-900 border-r border-neutral-800 flex flex-col shrink-0 transition-all duration-300 ease-in-out relative overflow-hidden`}
+        className={`${
+          isSidebarOpen ? 'translate-x-0 w-72 sm:w-64' : '-translate-x-full md:translate-x-0 md:w-0'
+        } fixed md:relative inset-y-0 left-0 z-40 md:z-auto
+          bg-neutral-900 border-r border-neutral-800 flex flex-col shrink-0
+          transition-all duration-300 ease-in-out overflow-hidden`}
       >
-        <div className="p-4 border-b border-transparent flex items-center shrink-0 w-64 mt-2 bg-neutral-900">
+        <div className="p-4 border-b border-transparent flex items-center shrink-0 w-full mt-2 bg-neutral-900">
           <button
             onClick={buatChatBaru}
             className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-200 py-3 px-4 rounded-xl font-medium transition-all shadow-sm flex items-center justify-between text-sm whitespace-nowrap border border-neutral-700">
@@ -699,7 +853,7 @@ function ChatComponent() {
             <Plus size={16} className="text-neutral-400" />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 w-64">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 w-full">
           {/* Search riwayat chat */}
           <div className="relative mb-2">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600" />
@@ -746,7 +900,8 @@ function ChatComponent() {
                       }
                       stop();
                       setRuanganId(chat.id);
-                      if (window.innerWidth < 640) setIsSidebarOpen(false);
+                      // Tutup sidebar di mobile setelah pilih chat
+                      if (window.innerWidth < 768) setIsSidebarOpen(false);
                     }}
                     className="flex-1 text-left px-3 py-3 truncate"
                   >
@@ -941,18 +1096,17 @@ function ChatComponent() {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0 transition-all duration-300 relative z-10 bg-[#0a0a0a]">
-        <header className="py-4 px-4 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3 w-1/4">
-            <button
-              onClick={toggleSidebar}
-              className="p-2 hover:bg-neutral-800 rounded-lg text-neutral-400 hover:text-white transition-colors cursor-pointer shrink-0"
-              aria-label="Toggle Sidebar"
-            >
-              <Menu size={24} />
-            </button>
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight text-white flex-1 text-center truncate">AI Chatbot Arise</h1>
-          <div className="w-1/4"></div> {/* Spacer for centering */}
+        <header className="py-3 px-3 sm:py-4 sm:px-4 flex items-center justify-between shrink-0 border-b border-neutral-900">
+          <button
+            onClick={toggleSidebar}
+            className="p-2.5 hover:bg-neutral-800 rounded-xl text-neutral-400 hover:text-white transition-colors cursor-pointer shrink-0 touch-manipulation"
+            aria-label="Toggle Sidebar"
+          >
+            <Menu size={22} />
+          </button>
+          <h1 className="text-base sm:text-xl font-semibold tracking-tight text-white truncate px-2">AI Chatbot Arise</h1>
+          {/* Spacer kanan agar judul center */}
+          <div className="w-10" />
         </header>
 
         {isLoadingHistory ? (
@@ -1191,9 +1345,10 @@ function ChatComponent() {
               >
                 <FileText size={14} />
                 Kelola Chunks
-                {chunks.length > 0 && (
-                  <span className="bg-neutral-700 text-neutral-300 text-xs px-1.5 py-0.5 rounded-full">{chunks.length}</span>
-                )}
+                {chunks.length > 0 && (() => {
+                  const groupCount = new Set(chunks.map(c => c.source)).size;
+                  return <span className="bg-neutral-700 text-neutral-300 text-xs px-1.5 py-0.5 rounded-full">{groupCount}</span>;
+                })()}
               </button>
             </div>
 
@@ -1239,9 +1394,51 @@ function ChatComponent() {
                     value={uploadText}
                     onChange={(e) => { setUploadText(e.target.value); setUploadFile(null); }}
                     placeholder="Atau tempel konten dokumen Anda di sini..."
-                    rows={8}
+                    rows={7}
                     className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-blue-500/60 resize-none transition-colors"
                   />
+
+                  {/* Grup Selector — hanya tampil untuk input teks manual (bukan file) */}
+                  {!uploadFile && (
+                    <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3 space-y-2">
+                      <p className="text-xs font-medium text-neutral-400">Masukkan ke Grup</p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setUploadSourceMode('new')}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${uploadSourceMode === 'new' ? 'bg-blue-600/20 border-blue-500/40 text-blue-400' : 'bg-neutral-900 border-neutral-700 text-neutral-500 hover:text-neutral-300'}`}
+                        >
+                          Grup Baru
+                        </button>
+                        <button
+                          onClick={() => setUploadSourceMode('existing')}
+                          disabled={chunks.length === 0}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:opacity-40 ${uploadSourceMode === 'existing' ? 'bg-blue-600/20 border-blue-500/40 text-blue-400' : 'bg-neutral-900 border-neutral-700 text-neutral-500 hover:text-neutral-300'}`}
+                        >
+                          Grup Ada ({new Set(chunks.map(c => c.source)).size})
+                        </button>
+                      </div>
+                      {uploadSourceMode === 'new' ? (
+                        <input
+                          type="text"
+                          value={uploadSourceName}
+                          onChange={e => setUploadSourceName(e.target.value)}
+                          placeholder="Nama grup baru (kosong = 'manual-input')"
+                          className="w-full bg-neutral-900 border border-neutral-700 focus:border-blue-500/50 rounded-lg px-3 py-1.5 text-xs text-neutral-200 placeholder-neutral-600 focus:outline-none transition-colors"
+                        />
+                      ) : (
+                        <select
+                          value={uploadSourceName}
+                          onChange={e => setUploadSourceName(e.target.value)}
+                          className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-blue-500/50 transition-colors cursor-pointer"
+                        >
+                          <option value="">-- Pilih grup --</option>
+                          {Array.from(new Set(chunks.map(c => c.source))).sort().map(src => (
+                            <option key={src} value={src}>{src}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-neutral-600">
@@ -1298,170 +1495,219 @@ function ChatComponent() {
               )}
 
               {/* === Tab Chunks === */}
-              {kostumiTab === 'chunks' && (
-                <div className="space-y-3">
-                  {isLoadingChunks ? (
-                    <div className="flex items-center justify-center py-12">
-                      <Loader2 size={24} className="animate-spin text-blue-400" />
-                    </div>
-                  ) : chunks.length === 0 ? (
-                    <div className="text-center py-12">
-                      <FileText size={36} className="mx-auto mb-3 text-neutral-700" />
-                      <p className="text-neutral-500 text-sm">Belum ada dokumen dalam knowledge base.</p>
-                      <p className="text-neutral-600 text-xs mt-1">Upload dokumen di tab sebelumnya.</p>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Toolbar multi-select */}
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={toggleSelectAll}
-                            className="flex items-center gap-2 text-xs text-neutral-400 hover:text-white transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-neutral-800"
-                          >
-                            <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${selectedChunkIds.size === chunks.length && chunks.length > 0
-                              ? 'bg-blue-600 border-blue-600'
-                              : selectedChunkIds.size > 0
-                                ? 'bg-blue-600/40 border-blue-500'
-                                : 'border-neutral-600'
-                              }`}>
-                              {selectedChunkIds.size === chunks.length && chunks.length > 0 ? (
-                                <Check size={10} className="text-white" />
-                              ) : selectedChunkIds.size > 0 ? (
-                                <div className="w-2 h-0.5 bg-white rounded" />
-                              ) : null}
-                            </div>
-                            Pilih Semua
-                          </button>
-                          <span className="text-xs text-neutral-600">{chunks.length} chunk</span>
-                        </div>
-                        {selectedChunkIds.size > 0 && (
-                          <button
-                            onClick={() => setShowBulkDeleteConfirm(true)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 hover:text-red-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-                          >
-                            <Trash2 size={12} />
-                            Hapus {selectedChunkIds.size} Terpilih
-                          </button>
-                        )}
+              {kostumiTab === 'chunks' && (() => {
+                // Kelompokkan chunks berdasarkan source
+                const groups = chunks.reduce<Record<string, typeof chunks>>((acc, c) => {
+                  const key = c.source || 'manual-input';
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(c);
+                  return acc;
+                }, {});
+                const groupKeys = Object.keys(groups).sort();
+
+                return (
+                  <div className="space-y-2">
+                    {isLoadingChunks ? (
+                      <div className="flex items-center justify-center py-12">
+                        <Loader2 size={24} className="animate-spin text-blue-400" />
                       </div>
-
-                      {chunks.map((chunk) => (
-                        <div
-                          key={chunk.id}
-                          className={`border rounded-xl overflow-hidden transition-colors ${selectedChunkIds.has(chunk.id)
-                            ? 'border-blue-500/50 bg-blue-500/5'
-                            : 'border-neutral-800'
-                            }`}
+                    ) : chunks.length === 0 ? (
+                      <div className="text-center py-12">
+                        <FileText size={36} className="mx-auto mb-3 text-neutral-700" />
+                        <p className="text-neutral-500 text-sm">Belum ada dokumen dalam knowledge base.</p>
+                        <p className="text-neutral-600 text-xs mt-1">Upload dokumen di tab sebelumnya.</p>
+                        <button
+                          onClick={() => { setShowNewGroupModal(true); setAddChunkContent(''); setNewGroupName(''); }}
+                          className="mt-4 flex items-center gap-2 px-4 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-medium transition-colors cursor-pointer mx-auto"
                         >
-                          <div className="flex items-center justify-between px-3 py-3 bg-neutral-950/60">
-                            {/* Checkbox */}
-                            <button
-                              onClick={() => toggleSelectChunk(chunk.id)}
-                              className="shrink-0 mr-2 cursor-pointer"
-                              title={selectedChunkIds.has(chunk.id) ? 'Batalkan pilihan' : 'Pilih chunk ini'}
-                            >
-                              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedChunkIds.has(chunk.id)
-                                ? 'bg-blue-600 border-blue-600'
-                                : 'border-neutral-600 hover:border-blue-500'
-                                }`}>
-                                {selectedChunkIds.has(chunk.id) && <Check size={10} className="text-white" />}
-                              </div>
-                            </button>
-
-                            <button
-                              onClick={() => setExpandedChunkId(expandedChunkId === chunk.id ? null : chunk.id)}
-                              className="flex items-center gap-2 flex-1 text-left text-sm text-neutral-300 hover:text-white transition-colors cursor-pointer min-w-0"
-                            >
-                              <ChevronDown
-                                size={14}
-                                className={`shrink-0 text-neutral-500 transition-transform ${expandedChunkId === chunk.id ? 'rotate-180' : ''}`}
-                              />
-                              <span className="truncate">{chunk.content.slice(0, 80)}...</span>
-                            </button>
-                            {/* Badge Global/Pribadi */}
-                            {chunk.isGlobal ? (
-                              <span className="ml-1 shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
-                                GLOBAL
-                              </span>
-                            ) : isAdmin && (
-                              <span className="ml-1 shrink-0 text-[10px] text-neutral-600 bg-neutral-800 px-1.5 py-0.5 rounded">
-                                {chunk.userId === '' ? 'lama' : chunk.userId.slice(-6)}
-                              </span>
-                            )}
-                            <button
-                              onClick={() => {
-                                if (chunk.isGlobal && !isAdmin) {
-                                  toast.error('Anda bukan admin. Chunk global tidak dapat diedit.');
-                                  return;
-                                }
-                                openEditChunk(chunk);
-                              }}
-                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${chunk.isGlobal && !isAdmin
-                                ? 'text-neutral-700 cursor-not-allowed'
-                                : 'text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10'
-                                }`}
-                              title={chunk.isGlobal && !isAdmin ? 'Hanya admin yang dapat mengedit chunk global' : 'Edit chunk'}
-                            >
-                              <Edit2 size={14} />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (chunk.isGlobal && !isAdmin) {
-                                  toast.error('Anda bukan admin. Chunk global tidak dapat dihapus.');
-                                  return;
-                                }
-                                handleDeleteChunk(chunk.id);
-                              }}
-                              disabled={deletingChunkId === chunk.id}
-                              className={`ml-1 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 disabled:opacity-50 ${chunk.isGlobal && !isAdmin
-                                ? 'text-neutral-700 cursor-not-allowed'
-                                : 'text-neutral-500 hover:text-red-400 hover:bg-red-500/10'
-                                }`}
-                              title={chunk.isGlobal && !isAdmin ? 'Hanya admin yang dapat menghapus chunk global' : 'Hapus chunk'}
-                            >
-                              {deletingChunkId === chunk.id ? (
-                                <Loader2 size={14} className="animate-spin" />
-                              ) : (
-                                <Trash2 size={14} />
-                              )}
-                            </button>
-                          </div>
-                          {expandedChunkId === chunk.id && (
-                            <div className="px-4 py-3 bg-neutral-950 border-t border-neutral-800">
-                              <p className="text-xs text-neutral-400 leading-relaxed whitespace-pre-wrap">{chunk.content}</p>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-
-                      {/* ── Sticky Floating Bar ── muncul saat ada chunk dipilih, user tidak perlu scroll ke atas */}
-                      {selectedChunkIds.size > 0 && (
-                        <div className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 px-4 py-3 bg-neutral-900/95 backdrop-blur border border-red-500/20 rounded-xl shadow-lg z-10">
-                          <span className="text-xs text-neutral-400">
-                            <span className="text-white font-semibold">{selectedChunkIds.size}</span> chunk dipilih
-                          </span>
+                          <Plus size={13} /> Buat Grup & Chunk Baru
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Toolbar global */}
+                        <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => setSelectedChunkIds(new Set())}
-                              className="px-3 py-1.5 text-xs text-neutral-400 hover:text-white border border-neutral-700 hover:border-neutral-500 rounded-lg transition-colors cursor-pointer"
+                              onClick={toggleSelectAll}
+                              className="flex items-center gap-2 text-xs text-neutral-400 hover:text-white transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-neutral-800"
                             >
-                              Batal
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${selectedChunkIds.size === chunks.length && chunks.length > 0 ? 'bg-blue-600 border-blue-600' : selectedChunkIds.size > 0 ? 'bg-blue-600/40 border-blue-500' : 'border-neutral-600'}`}>
+                                {selectedChunkIds.size === chunks.length && chunks.length > 0 ? <Check size={10} className="text-white" /> : selectedChunkIds.size > 0 ? <div className="w-2 h-0.5 bg-white rounded" /> : null}
+                              </div>
+                              Pilih Semua
                             </button>
+                            <span className="text-xs text-neutral-600">{groupKeys.length} grup · {chunks.length} chunk</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {selectedChunkIds.size > 0 && (
+                              <button
+                                onClick={() => setShowBulkDeleteConfirm(true)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                              >
+                                <Trash2 size={12} /> Hapus {selectedChunkIds.size}
+                              </button>
+                            )}
                             <button
-                              onClick={() => setShowBulkDeleteConfirm(true)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer shadow-sm"
+                              onClick={() => { setShowNewGroupModal(true); setAddChunkContent(''); setNewGroupName(''); }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-400 rounded-lg text-xs font-medium transition-colors cursor-pointer"
                             >
-                              <Trash2 size={12} />
-                              Hapus {selectedChunkIds.size} Terpilih
+                              <Plus size={12} /> Grup Baru
                             </button>
                           </div>
                         </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
+
+                         {/* Group cards — Global dulu, lalu Pribadi */}
+                        {[
+                          ...groupKeys.filter(k => groups[k].some(c => c.isGlobal)),
+                          ...groupKeys.filter(k => !groups[k].some(c => c.isGlobal)),
+                        ].map((groupKey, idx, arr) => {
+                          const groupChunks = groups[groupKey];
+                          const isExpanded = expandedGroupId === groupKey;
+                          const isGlobalGroup = groupChunks.some(c => c.isGlobal);
+                          const selectedInGroup = groupChunks.filter(c => selectedChunkIds.has(c.id)).length;
+                          const allInGroupSelected = selectedInGroup === groupChunks.length;
+                          const isDeletingThisGroup = deletingGroupSource === groupKey;
+                          const isRenaming = renamingGroup === groupKey;
+                          const prevKey = arr[idx - 1];
+                          const prevIsGlobal = prevKey ? groups[prevKey].some(c => c.isGlobal) : null;
+                          const showDivider = idx > 0 && prevIsGlobal && !isGlobalGroup;
+
+                          return (
+                            <div key={groupKey} className="mb-2">
+                              {idx === 0 && isGlobalGroup && (
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="flex-1 h-px bg-neutral-800" />
+                                  <span className="text-[10px] text-neutral-600 shrink-0">Global</span>
+                                  <div className="flex-1 h-px bg-neutral-800" />
+                                </div>
+                              )}
+                              {showDivider && (
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="flex-1 h-px bg-neutral-800" />
+                                  <span className="text-[10px] text-neutral-600 shrink-0">Pribadi</span>
+                                  <div className="flex-1 h-px bg-neutral-800" />
+                                </div>
+                              )}
+                              <div className={`border rounded-xl overflow-hidden transition-all ${isExpanded ? 'border-blue-500/30' : isGlobalGroup ? 'border-amber-500/20' : 'border-neutral-800'}`}>
+                                {/* Group Header */}
+                                <div className={`flex items-center gap-2 px-3 py-2.5 ${isGlobalGroup ? 'bg-amber-500/5' : 'bg-neutral-950/80'}`}>
+                                  {/* Checkbox */}
+                                  <button onClick={() => toggleSelectGroup(groupChunks)} className="shrink-0 cursor-pointer">
+                                    <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${allInGroupSelected ? 'bg-blue-600 border-blue-600' : selectedInGroup > 0 ? 'bg-blue-600/40 border-blue-500' : 'border-neutral-600 hover:border-blue-500'}`}>
+                                      {allInGroupSelected ? <Check size={10} className="text-white" /> : selectedInGroup > 0 ? <div className="w-2 h-0.5 bg-white rounded" /> : null}
+                                    </div>
+                                  </button>
+
+                                  {isRenaming ? (
+                                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                                      <input
+                                        autoFocus
+                                        value={renameGroupValue}
+                                        onChange={e => setRenameGroupValue(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') handleRenameGroup(groupKey); if (e.key === 'Escape') setRenamingGroup(null); }}
+                                        className="flex-1 min-w-0 bg-neutral-900 border border-blue-500/50 rounded-lg px-2.5 py-1 text-sm text-neutral-100 focus:outline-none"
+                                        placeholder="Nama grup baru..."
+                                      />
+                                      <button onClick={() => handleRenameGroup(groupKey)} disabled={isRenamingGroup} className="shrink-0 p-1.5 text-green-400 hover:bg-green-500/10 rounded-lg transition-colors cursor-pointer disabled:opacity-50">
+                                        {isRenamingGroup ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                                      </button>
+                                      <button onClick={() => setRenamingGroup(null)} className="shrink-0 p-1.5 text-neutral-500 hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer">
+                                        <X size={13} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button onClick={() => setExpandedGroupId(isExpanded ? null : groupKey)} className="flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer">
+                                      <ChevronDown size={14} className={`shrink-0 text-neutral-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                      <FileText size={14} className={`shrink-0 ${isGlobalGroup ? 'text-amber-400' : 'text-blue-400'}`} />
+                                      <span className="font-medium text-sm text-neutral-200 truncate">{groupKey}</span>
+                                      <span className="shrink-0 text-[10px] text-neutral-500 bg-neutral-800 px-1.5 py-0.5 rounded-full">{groupChunks.length} chunk</span>
+                                      {isGlobalGroup && <span className="shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">GLOBAL</span>}
+                                    </button>
+                                  )}
+
+                                  {!isRenaming && (
+                                    <>
+                                      <button onClick={e => { e.stopPropagation(); setRenamingGroup(groupKey); setRenameGroupValue(groupKey); }} disabled={isGlobalGroup && !isAdmin} className={`shrink-0 p-1.5 rounded-lg transition-colors cursor-pointer ${isGlobalGroup && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-500 hover:text-yellow-400 hover:bg-yellow-500/10'}`} title="Rename grup">
+                                        <Pencil size={13} />
+                                      </button>
+                                      <button onClick={e => { e.stopPropagation(); setAddChunkGroup(addChunkGroup === groupKey ? null : groupKey); setAddChunkContent(''); setExpandedGroupId(groupKey); }} className="shrink-0 p-1.5 text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors cursor-pointer" title="Tambah chunk">
+                                        <Plus size={14} />
+                                      </button>
+                                      <button onClick={e => { e.stopPropagation(); setShowGroupDeleteConfirm(groupKey); }} disabled={isDeletingThisGroup || (isGlobalGroup && !isAdmin)} className={`shrink-0 p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-40 ${isGlobalGroup && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-500 hover:text-red-400 hover:bg-red-500/10'}`} title="Hapus grup">
+                                        {isDeletingThisGroup ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+
+                                {/* Expanded content */}
+                                {isExpanded && (
+                                  <div className="border-t border-neutral-800">
+                                    {addChunkGroup === groupKey && (
+                                      <div className="px-3 py-3 bg-blue-500/5 border-b border-blue-500/20">
+                                        <p className="text-xs text-blue-400 font-medium mb-2">+ Tambah chunk ke &ldquo;{groupKey}&rdquo;</p>
+                                        <textarea value={addChunkContent} onChange={e => setAddChunkContent(e.target.value)} rows={4} placeholder="Konten chunk baru..." className="w-full bg-neutral-950 border border-neutral-700 focus:border-blue-500/60 rounded-lg p-3 text-xs text-neutral-200 placeholder-neutral-600 focus:outline-none resize-none transition-colors" />
+                                        <div className="flex gap-2 mt-2 justify-end">
+                                          <button onClick={() => { setAddChunkGroup(null); setAddChunkContent(''); }} className="px-3 py-1.5 text-xs text-neutral-400 border border-neutral-700 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer">Batal</button>
+                                          <button onClick={() => handleAddChunkToGroup(groupKey, isGlobalGroup)} disabled={isAddingChunk || !addChunkContent.trim()} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer">
+                                            {isAddingChunk ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                                            {isAddingChunk ? 'Menambahkan...' : 'Tambah Chunk'}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {groupChunks.map((chunk) => (
+                                      <div key={chunk.id} className={`border-b border-neutral-800/60 last:border-b-0 ${selectedChunkIds.has(chunk.id) ? 'bg-blue-500/5' : ''}`}>
+                                        <div className="flex items-center gap-2 px-4 py-2.5">
+                                          <button onClick={() => toggleSelectChunk(chunk.id)} className="shrink-0 cursor-pointer">
+                                            <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${selectedChunkIds.has(chunk.id) ? 'bg-blue-600 border-blue-600' : 'border-neutral-600 hover:border-blue-500'}`}>
+                                              {selectedChunkIds.has(chunk.id) && <Check size={9} className="text-white" />}
+                                            </div>
+                                          </button>
+                                          <button onClick={() => setExpandedChunkId(expandedChunkId === chunk.id ? null : chunk.id)} className="flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer">
+                                            <ChevronDown size={12} className={`shrink-0 text-neutral-600 transition-transform ${expandedChunkId === chunk.id ? 'rotate-180' : ''}`} />
+                                            <span className="text-xs text-neutral-400 truncate">{chunk.content.slice(0, 90)}...</span>
+                                          </button>
+                                          <button onClick={() => { if (chunk.isGlobal && !isAdmin) { toast.error('Hanya admin yang dapat mengedit chunk global.'); return; } openEditChunk(chunk); }} className={`shrink-0 p-1 rounded transition-colors cursor-pointer ${chunk.isGlobal && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-600 hover:text-blue-400 hover:bg-blue-500/10'}`}>
+                                            <Edit2 size={12} />
+                                          </button>
+                                          <button onClick={() => { if (chunk.isGlobal && !isAdmin) { toast.error('Hanya admin yang dapat menghapus chunk global.'); return; } handleDeleteChunk(chunk.id); }} disabled={deletingChunkId === chunk.id} className={`shrink-0 p-1 rounded transition-colors cursor-pointer disabled:opacity-50 ${chunk.isGlobal && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-600 hover:text-red-400 hover:bg-red-500/10'}`}>
+                                            {deletingChunkId === chunk.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                                          </button>
+                                        </div>
+                                        {expandedChunkId === chunk.id && (
+                                          <div className="px-5 pb-3 pt-1">
+                                            <p className="text-[11px] text-neutral-500 leading-relaxed whitespace-pre-wrap bg-neutral-950 rounded-lg p-3 border border-neutral-800">{chunk.content}</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Sticky floating bulk-delete bar */}
+                        {selectedChunkIds.size > 0 && (
+                          <div className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 px-4 py-3 bg-neutral-900/95 backdrop-blur border border-red-500/20 rounded-xl shadow-lg z-10">
+                            <span className="text-xs text-neutral-400"><span className="text-white font-semibold">{selectedChunkIds.size}</span> chunk dipilih</span>
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => setSelectedChunkIds(new Set())} className="px-3 py-1.5 text-xs text-neutral-400 hover:text-white border border-neutral-700 hover:border-neutral-500 rounded-lg transition-colors cursor-pointer">Batal</button>
+                              <button onClick={() => setShowBulkDeleteConfirm(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer shadow-sm">
+                                <Trash2 size={12} /> Hapus {selectedChunkIds.size} Terpilih
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
 
             </div>
           </div>
@@ -1562,6 +1808,78 @@ function ChatComponent() {
                 ) : (
                   <><Check size={14} /> Simpan Perubahan</>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Group Delete Confirm Modal ===== */}
+      {showGroupDeleteConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center mb-4">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-1">Hapus Grup?</h3>
+              <p className="text-neutral-400 text-sm mb-1">
+                Grup <span className="text-white font-medium">&ldquo;{showGroupDeleteConfirm}&rdquo;</span>
+              </p>
+              <p className="text-neutral-500 text-xs mb-6">
+                Semua chunk dalam grup ini akan dihapus permanen. Tindakan ini tidak dapat dibatalkan.
+              </p>
+              <div className="flex gap-3 w-full">
+                <button onClick={() => setShowGroupDeleteConfirm(null)} disabled={deletingGroupSource === showGroupDeleteConfirm} className="flex-1 px-4 py-2.5 rounded-xl border border-neutral-700 text-neutral-300 hover:bg-neutral-800 font-medium text-sm transition-colors cursor-pointer disabled:opacity-50">Batal</button>
+                <button onClick={() => handleDeleteGroup(showGroupDeleteConfirm)} disabled={deletingGroupSource === showGroupDeleteConfirm} className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50">
+                  {deletingGroupSource === showGroupDeleteConfirm ? <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Hapus Grup'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== New Group Modal ===== */}
+      {showNewGroupModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between p-5 border-b border-neutral-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center"><Plus size={18} /></div>
+                <div>
+                  <h2 className="text-base font-semibold text-white">Buat Grup Baru</h2>
+                  <p className="text-xs text-neutral-500">Tambah grup chunk baru ke knowledge base</p>
+                </div>
+              </div>
+              <button onClick={() => { setShowNewGroupModal(false); setNewGroupName(''); setAddChunkContent(''); }} className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"><X size={18} /></button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1.5">Nama Grup / Dokumen</label>
+                <input type="text" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} placeholder="contoh: FAQ-Produk, panduan.txt" className="w-full bg-neutral-950 border border-neutral-800 focus:border-blue-500/60 rounded-xl px-4 py-2.5 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none transition-colors" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1.5">Konten Chunk Pertama</label>
+                <textarea value={addChunkContent} onChange={e => setAddChunkContent(e.target.value)} rows={7} placeholder="Masukkan konten chunk pertama untuk grup ini..." className="w-full bg-neutral-950 border border-neutral-800 focus:border-blue-500/60 rounded-xl p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none resize-none transition-colors" />
+                <p className="text-xs text-neutral-600 mt-1 text-right">{addChunkContent.trim().split(/\s+/).filter(Boolean).length} kata · ≈{Math.ceil(addChunkContent.length / 4)} token</p>
+              </div>
+              {isAdmin && (
+                <div className="flex items-center justify-between p-3 bg-neutral-950 border border-neutral-800 rounded-xl">
+                  <div>
+                    <p className="text-xs font-medium text-neutral-300">Jadikan Global</p>
+                    <p className="text-[11px] text-neutral-600 mt-0.5">Chunk dapat diakses semua user</p>
+                  </div>
+                  <button type="button" onClick={() => setIsGlobalUpload(v => !v)} className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${isGlobalUpload ? 'bg-amber-500' : 'bg-neutral-700'}`}>
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${isGlobalUpload ? 'translate-x-4' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3 p-5 border-t border-neutral-800 shrink-0">
+              <button onClick={() => { setShowNewGroupModal(false); setNewGroupName(''); setAddChunkContent(''); }} disabled={isAddingChunk} className="flex-1 px-4 py-2.5 rounded-xl border border-neutral-700 text-neutral-300 hover:bg-neutral-800 font-medium text-sm transition-colors cursor-pointer disabled:opacity-50">Batal</button>
+              <button onClick={handleAddNewGroup} disabled={isAddingChunk || !newGroupName.trim() || !addChunkContent.trim()} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2">
+                {isAddingChunk ? <><Loader2 size={14} className="animate-spin" /> Membuat...</> : <><Plus size={14} /> Buat Grup</>}
               </button>
             </div>
           </div>

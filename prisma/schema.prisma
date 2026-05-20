@@ -44,6 +44,7 @@ model Document {
   createdAt DateTime @default(now())
   userId    String   @default("")
   isGlobal  Boolean  @default(false)
+  source    String   @default("manual-input")
 }
 
 model PromoteToken {
