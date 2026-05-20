@@ -1,13 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  reactCompiler: true,
-  eslint: {
-    ignoreDuringBuilds: true,
+  experimental: {
+    reactCompiler: true,
   },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // pdf-parse mencoba membaca file test saat di-bundle oleh Next.js
+  // serverExternalPackages memaksa Next.js untuk tidak me-bundle library ini
+  serverExternalPackages: ['pdf-parse'],
 };
 
 export default nextConfig;
