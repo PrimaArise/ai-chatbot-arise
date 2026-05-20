@@ -145,7 +145,8 @@ function ChatComponent() {
   const [ingestResult, setIngestResult] = useState<string | null>(null);
   const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; isGlobal: boolean; userId: string; source: string }[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
-  const [deletingChunkId, setDeletingChunkId] = useState<string | null>(null);
+  // deletingChunkId: digunakan di JSX untuk loading state per-item (read-only, selalu null = tidak ada loading)
+  const [deletingChunkId] = useState<string | null>(null);
   const [expandedChunkId, setExpandedChunkId] = useState<string | null>(null);
   const [editingChunkId, setEditingChunkId] = useState<string | null>(null);
   const [editChunkContent, setEditChunkContent] = useState('');
@@ -155,7 +156,8 @@ function ChatComponent() {
 
   // ===== Multi-select chunks =====
   const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set());
-  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  // isBulkDeleting: digunakan di JSX untuk disable tombol (read-only, selalu false = optimistic)
+  const [isBulkDeleting] = useState(false);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
   // ===== Grouping state =====
