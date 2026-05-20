@@ -1457,10 +1457,11 @@ function ChatComponent() {
                         <button
                           type="button"
                           onClick={() => setIsGlobalUpload(v => !v)}
-                          className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded-lg border transition-all cursor-pointer ${isGlobalUpload
-                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                            : 'bg-neutral-800 border-neutral-700 text-neutral-500 hover:text-neutral-300'
-                            }`}
+                          className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded-lg border transition-all cursor-pointer ${
+                            isGlobalUpload
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                              : 'bg-blue-600/10 border-blue-500/30 text-blue-400'
+                          }`}
                           title={isGlobalUpload ? 'Dokumen akan tersedia untuk semua user' : 'Klik untuk jadikan dokumen global'}
                         >
                           <Shield size={11} />
@@ -1624,7 +1625,7 @@ function ChatComponent() {
                                       <FileText size={14} className={`shrink-0 ${isGlobalGroup ? 'text-amber-400' : 'text-blue-400'}`} />
                                       <span className="font-medium text-sm text-neutral-200 truncate">{groupKey}</span>
                                       <span className="shrink-0 text-[10px] text-neutral-500 bg-neutral-800 px-1.5 py-0.5 rounded-full">{groupChunks.length} chunk</span>
-                                      {isGlobalGroup && <span className="shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">GLOBAL</span>}
+                                      {isGlobalGroup && <span className="hidden sm:inline shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">GLOBAL</span>}
                                     </button>
                                   )}
 
