@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import toast, { Toaster } from 'react-hot-toast';
-import { UserPlus, Mail, Lock, Check, X, Shield, Eye, EyeOff } from 'lucide-react';
+import { UserPlus, Mail, Lock, Check, X, Eye, EyeOff } from 'lucide-react';
 import Link from 'next/link';
 
 export default function RegisterPage() {
@@ -15,12 +15,6 @@ export default function RegisterPage() {
     const [showPassword, setShowPassword] = useState(false);
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    // ===== Admin OTP =====
-    const [wantAdmin, setWantAdmin] = useState(false);
-    const [otpSent, setOtpSent] = useState(false);
-    const [otpCode, setOtpCode] = useState('');
-    const [otpVerified, setOtpVerified] = useState(false);
-    const [isSendingOtp, setIsSendingOtp] = useState(false);
 
     useEffect(() => {
         const checkAlreadyLoggedIn = async () => {
@@ -50,12 +44,10 @@ export default function RegisterPage() {
         setIsLoading(true);
 
         try {
-            // Daftar via server-side API (bukan langsung Supabase)
-            // agar verifikasi admin email dilakukan di server (aman)
             const res = await fetch('/api/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, otp: otpVerified ? otpCode : undefined }),
+                body: JSON.stringify({ email, password }),
             });
 
             const result = await res.json();
@@ -127,7 +119,7 @@ export default function RegisterPage() {
                                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                             </button>
                         </div>
-                        {/* Indikator Validasi Password — horizontal row di mobile */}
+                        {/* Indikator Validasi Password */}
                         <div className="flex flex-row flex-wrap gap-x-3 gap-y-1 mt-1">
                             <div className={`flex items-center gap-1 text-[10px] sm:text-xs transition-colors ${password.length >= 10 ? 'text-green-500' : 'text-neutral-500'}`}>
                                 {password.length >= 10 ? <Check size={11} /> : <X size={11} />}
@@ -169,122 +161,17 @@ export default function RegisterPage() {
                         </div>
                     </div>
 
-                    {/* ─── Toggle Admin + OTP ─── */}
-                    <div className={`rounded-xl border p-4 transition-all ${
-                        wantAdmin ? 'border-amber-500/40 bg-amber-500/5' : 'border-neutral-800 bg-neutral-950/50'
-                    }`}>
-                        {/* Toggle */}
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setWantAdmin(v => !v);
-                                setOtpSent(false);
-                                setOtpCode('');
-                                setOtpVerified(false);
-                            }}
-                            className="flex items-center justify-between w-full cursor-pointer"
-                        >
-                            <div className="flex items-center gap-2.5">
-                                <Shield size={16} className={wantAdmin ? 'text-amber-400' : 'text-neutral-500'} />
-                                <span className={`text-sm font-medium ${wantAdmin ? 'text-amber-300' : 'text-neutral-400'}`}>
-                                    Daftar sebagai Admin
-                                </span>
-                            </div>
-                            <div className={`relative w-10 h-5 rounded-full transition-colors ${wantAdmin ? 'bg-amber-500' : 'bg-neutral-700'}`}>
-                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${wantAdmin ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                            </div>
-                        </button>
-
-                        {wantAdmin && (
-                            <div className="mt-3 pt-3 border-t border-amber-500/20 space-y-3">
-                                {otpVerified ? (
-                                    <div className="flex items-center gap-2 text-green-400 text-xs font-medium">
-                                        <Check size={14} />
-                                        OTP Terverifikasi — Anda akan terdaftar sebagai Admin
-                                    </div>
-                                ) : !otpSent ? (
-                                    <>
-                                        <p className="text-xs text-amber-400/80">
-                                            Kirim permintaan ke admin. Kode OTP akan dikirim ke email pengelola sistem.
-                                        </p>
-                                        <button
-                                            type="button"
-                                            onClick={async () => {
-                                                if (!email.trim()) { return; }
-                                                setIsSendingOtp(true);
-                                                const res = await fetch('/api/promote-request-register', {
-                                                    method: 'POST',
-                                                    headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify({ email }),
-                                                });
-                                                const result = await res.json();
-                                                setIsSendingOtp(false);
-                                                if (res.ok) { setOtpSent(true); toast.success('Kode OTP dikirim ke admin!'); }
-                                                else { toast.error(result.error || 'Gagal mengirim OTP.'); }
-                                            }}
-                                            disabled={isSendingOtp || !email.trim()}
-                                            className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-                                        >
-                                            {isSendingOtp
-                                                ? <div className="h-3 w-3 border border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                                : <Shield size={12} />}
-                                            Kirim OTP ke Admin
-                                        </button>
-                                    </>
-                                ) : (
-                                    <>
-                                        <p className="text-xs text-green-400">✅ OTP dikirim ke admin. Minta kodenya dan masukkan di bawah.</p>
-                                        <input
-                                            type="text"
-                                            inputMode="numeric"
-                                            maxLength={6}
-                                            placeholder="Masukkan 6 digit kode..."
-                                            value={otpCode}
-                                            onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                                            className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 focus:border-amber-500/50 rounded-lg text-sm text-center text-neutral-200 placeholder-neutral-600 outline-none transition-colors tracking-widest font-mono"
-                                        />
-                                        <div className="flex gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => { setOtpSent(false); setOtpCode(''); }}
-                                                className="flex-1 py-2 px-3 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-400 rounded-lg text-xs transition-all cursor-pointer"
-                                            >
-                                                Kirim Ulang
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    if (otpCode.length === 6) {
-                                                        setOtpVerified(true);
-                                                        toast.success('Kode OTP diterima! Lanjutkan pendaftaran.');
-                                                    } else {
-                                                        toast.error('Kode harus 6 digit.');
-                                                    }
-                                                }}
-                                                disabled={otpCode.length !== 6}
-                                                className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-                                            >
-                                                <Shield size={12} />
-                                                Verifikasi
-                                            </button>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        )}
-                    </div>
-
                     <button
                         type="submit"
-                        disabled={isLoading || !email || password.length < 10 || confirmPassword.length < 10 || (wantAdmin && !otpVerified)}
+                        disabled={isLoading || !email || password.length < 10 || confirmPassword.length < 10}
                         className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-semibold text-sm transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed border border-blue-500 cursor-pointer"
                     >
                         {isLoading ? (
                             <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                         ) : (
                             <>
-                                {wantAdmin && otpVerified ? <Shield size={18} className="text-amber-300" /> : <UserPlus size={18} />}
-                                {wantAdmin && otpVerified ? 'Daftar sebagai Admin' : 'Daftar Sekarang'}
+                                <UserPlus size={18} />
+                                Daftar Sekarang
                             </>
                         )}
                     </button>

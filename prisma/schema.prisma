@@ -32,26 +32,15 @@ model User {
   id        String   @id
   email     String   @unique
   password  String
-  role      String   @default("user")
   createdAt DateTime @default(now())
   chats     Chat[]
 }
 
 model Document {
-  id        String   @id @default(cuid())
+  id        String                        @id @default(cuid())
   content   String
   embedding Unsupported("vector(3072)")?
-  createdAt DateTime @default(now())
-  userId    String   @default("")
-  isGlobal  Boolean  @default(false)
-  source    String   @default("manual-input")
-}
-
-model PromoteToken {
-  id        String   @id @default(cuid())
-  userId    String
-  otp       String
-  expiresAt DateTime
-  used      Boolean  @default(false)
-  createdAt DateTime @default(now())
+  createdAt DateTime                      @default(now())
+  userId    String                        @default("")
+  source    String                        @default("manual-input")
 }

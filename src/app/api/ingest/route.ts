@@ -157,7 +157,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // ============================================================
 // INGEST PIPELINE
 // ============================================================
-async function ingestDocument(rawText: string, source: string, userId: string, isGlobal: boolean): Promise<{ chunks: ChunkResult[]; inserted: number; skipped: number }> {
+async function ingestDocument(rawText: string, source: string, userId: string): Promise<{ chunks: ChunkResult[]; inserted: number; skipped: number }> {
     const chunks = chunkDocument(rawText, source);
     const CONCURRENCY = 5; // max parallel Gemini API calls
 
@@ -169,14 +169,13 @@ async function ingestDocument(rawText: string, source: string, userId: string, i
         const embedding = await generateEmbedding(chunk.text);
         const vectorString = `[${embedding.join(',')}]`;
         const rowsAffected = await prisma.$executeRaw`
-            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", "isGlobal", source)
+            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", source)
             SELECT
                 gen_random_uuid()::text,
                 ${chunk.text},
                 ${vectorString}::vector(3072),
                 NOW(),
                 ${userId},
-                ${isGlobal},
                 ${source}
             WHERE NOT EXISTS (
                 SELECT 1 FROM "Document"
@@ -223,17 +222,9 @@ export async function POST(req: Request) {
         }
         const userId = user.id;
 
-        // Ambil role user — isGlobal hanya diizinkan untuk admin
-        const roleRows = await prisma.$queryRaw<{ role: string }[]>`
-            SELECT role FROM "User" WHERE id = ${userId} LIMIT 1
-        `;
-        const isAdmin = roleRows?.[0]?.role === 'admin';
-
         const contentType = req.headers.get('content-type') || '';
         let rawText = '';
         let source = 'manual-input';
-
-        let isGlobal = false;
 
         if (contentType.includes('multipart/form-data')) {
             const formData = await req.formData();
@@ -282,16 +273,13 @@ export async function POST(req: Request) {
                 );
             }
 
-            // isGlobal untuk file upload: baca dari form field (opsional, default false)
-            const isGlobalField = formData.get('isGlobal');
-            isGlobal = isAdmin && isGlobalField === 'true';
+            // isGlobal selalu false (dihapus dari skema)
 
         } else {
             // JSON body
-            const jsonBody = await req.json() as { content?: string; source?: string; isGlobal?: boolean };
+            const jsonBody = await req.json() as { content?: string; source?: string };
             rawText = jsonBody.content || '';
             source = jsonBody.source || 'manual-input';
-            isGlobal = isAdmin && jsonBody.isGlobal === true;
         }
 
         // ── Proses rawText (berlaku untuk semua path) ──
@@ -302,12 +290,12 @@ export async function POST(req: Request) {
             );
         }
 
-        const result = await ingestDocument(rawText, source, userId, isGlobal);
+        const result = await ingestDocument(rawText, source, userId);
 
         const skipMsg = result.skipped > 0 ? ` (${result.skipped} duplikat dilewati)` : '';
         return NextResponse.json({
             success: true,
-            message: `Berhasil mengindeks ${result.inserted} chunk dari "${source}" ke knowledge base${isGlobal ? ' (Global)' : ''}${skipMsg}.`,
+            message: `Berhasil mengindeks ${result.inserted} chunk dari "${source}" ke knowledge base${skipMsg}.`,
             chunks: result.chunks.map(c => ({
                 section: c.section || '(no section)',
                 preview: c.text.substring(0, 80) + '...',

@@ -13,7 +13,7 @@ const SUGGESTED_QUESTIONS = [
   'Apa itu Chatbot Arise dan bagaimana cara kerjanya?',
   'Bagaimana cara mengunggah dokumen ke Knowledge Base?',
   'Apa perbedaan mode Knowledge Base ON dan OFF?',
-  'Bagaimana cara mendapatkan akses Administrator?',
+  'Bagaimana cara mereset password akun saya?',
   'Apa saja fitur utama yang dimiliki Chatbot Arise?',
 ];
 
@@ -59,16 +59,7 @@ export default function WelcomeScreen({ input, handleInputChange, handleSubmit, 
             <button
               key={idx}
               onClick={() => handleBubbleClick(question)}
-              className="
-                group w-full text-left px-4 py-3 rounded-2xl
-                bg-neutral-900 border border-neutral-800
-                hover:border-blue-500/40 hover:bg-neutral-800/80
-                text-neutral-400 hover:text-neutral-200
-                text-sm leading-relaxed
-                transition-all duration-200
-                cursor-pointer
-                relative overflow-hidden
-              "
+              className="group w-full text-left px-4 py-3 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-blue-500/40 hover:bg-neutral-800/80 text-neutral-400 hover:text-neutral-200 text-sm leading-relaxed transition-all duration-200 cursor-pointer relative overflow-hidden"
             >
               {/* Subtle shimmer on hover */}
               <span className="absolute inset-0 bg-gradient-to-r from-blue-600/0 via-blue-600/5 to-purple-600/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />

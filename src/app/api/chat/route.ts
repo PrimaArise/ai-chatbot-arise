@@ -5,6 +5,7 @@ import { streamText, smoothStream, generateText, CoreMessage, createDataStream, 
 import { getSupabaseServer } from '@/lib/supabase-server';
 import { GoogleGenAI } from '@google/genai';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { BUILT_IN_KNOWLEDGE } from '@/data/system-knowledge';
 
 // ============================================================
 // CONFIG
@@ -53,7 +54,7 @@ const RAG_QUERY_WINDOW = 3;
 async function hasKnowledgeBase(userId: string): Promise<boolean> {
     const count = await prisma.$queryRaw<{ count: bigint }[]>`
         SELECT COUNT(*) as count FROM "Document"
-        WHERE "userId" = ${userId} OR "isGlobal" = true
+        WHERE "userId" = ${userId}
     `;
     return Number(count[0]?.count ?? 0) > 0;
 }
@@ -163,7 +164,7 @@ async function retrieveRelevantContext(
         let docs = await prisma.$queryRaw<{ content: string; distance: number }[]>`
             SELECT content, (embedding <=> ${vectorString}::vector(3072)) AS distance
             FROM "Document"
-            WHERE ("userId" = ${userId} OR "isGlobal" = true)
+            WHERE "userId" = ${userId}
               AND (embedding <=> ${vectorString}::vector(3072)) < ${RAG_DISTANCE_THRESHOLD}
             ORDER BY distance ASC
             LIMIT ${RAG_TOP_K}
@@ -175,7 +176,7 @@ async function retrieveRelevantContext(
             docs = await prisma.$queryRaw<{ content: string; distance: number }[]>`
                 SELECT content, (embedding <=> ${vectorString}::vector(3072)) AS distance
                 FROM "Document"
-                WHERE ("userId" = ${userId} OR "isGlobal" = true)
+                WHERE "userId" = ${userId}
                   AND (embedding <=> ${vectorString}::vector(3072)) < ${RAG_FALLBACK_THRESHOLD}
                 ORDER BY distance ASC
                 LIMIT ${RAG_TOP_K}
@@ -333,11 +334,15 @@ export async function POST(req: Request) {
         let systemPrompt: string;
 
         if (!useKB) {
-            // 🟢 MODE BEBAS: Knowledge Base dimatikan oleh user — AI bebas menjawab
+            // 🟢 MODE BEBAS: Knowledge Base dimatikan — AI bebas menjawab + selalu punya built-in knowledge
             systemPrompt = `Anda adalah AI chatbot bernama Arise, asisten cerdas yang siap membantu.
 Anda dapat menjawab pertanyaan apapun dari pengetahuan umum Anda secara bebas, akurat, dan membantu.
 Jawab secara natural, ramah, dan profesional.
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English.`;
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English.
+
+=== INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
+${BUILT_IN_KNOWLEDGE}
+=== AKHIR INFORMASI SISTEM ===`;
 
         } else if (kbExists && ragContext) {
             // ✅ MODE AKTIF: KB ada + konteks relevan ditemukan
@@ -350,25 +355,28 @@ ATURAN PERILAKU — IKUTI DENGAN TEPAT:
    → Contoh: "Halo! Saya AI chatbot yang siap membantu menjawab pertanyaan berdasarkan dokumen yang tersedia. Silakan ajukan pertanyaan Anda."
 
 2. META QUESTION (pertanyaan tentang diri Anda seperti "kamu apa?", "siapa kamu?", "kamu bisa apa?"):
-   → Jelaskan fungsi Anda secara umum tanpa menyebut nama perusahaan spesifik.
-   → Contoh: "Saya adalah AI chatbot yang membantu menjawab pertanyaan berdasarkan dokumen yang telah diberikan kepada saya."
+   → Jawab berdasarkan INFORMASI SISTEM di bawah ini.
 
 3. PERTANYAAN SESUAI DOKUMEN:
-   → Jawab berdasarkan KONTEKS PENGETAHUAN di bawah ini.
-   → Gunakan SELURUH informasi yang relevan dari konteks — jangan hanya ambil sebagian.
-   → Jika jawaban tersebar di beberapa referensi, GABUNGKAN semuanya menjadi jawaban yang komprehensif.
-   → Jawab secara natural dan profesional — jangan sebut "referensi" atau "dokumen" kepada pengguna.
+   → Jawab berdasarkan KONTEKS DOKUMEN USER di bawah ini.
+   → Gunakan SELURUH informasi yang relevan — jangan hanya ambil sebagian.
+   → Jika jawaban tersebar di beberapa referensi, GABUNGKAN semuanya menjadi jawaban komprehensif.
+   → Jawab secara natural — jangan sebut "referensi" atau "dokumen" kepada pengguna.
 
 4. PERTANYAAN DI LUAR DOKUMEN:
-   → Jika BENAR-BENAR tidak ada informasi relevan dalam konteks, tolak dengan sopan:
-      "Maaf, saya tidak menemukan informasi terkait hal tersebut dalam basis pengetahuan saya."
+   → Jika tidak ada info relevan dalam konteks dokumen, cek dulu INFORMASI SISTEM.
+   → Jika tetap tidak ada, tolak dengan sopan: "Maaf, saya tidak menemukan informasi terkait hal tersebut dalam basis pengetahuan saya."
    → JANGAN menambahkan informasi dari pengetahuan umum Anda.
 
 PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English.
 
-=== KONTEKS PENGETAHUAN ===
+=== INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
+${BUILT_IN_KNOWLEDGE}
+=== AKHIR INFORMASI SISTEM ===
+
+=== KONTEKS DOKUMEN USER ===
 ${ragContext}
-=== AKHIR KONTEKS ===`;
+=== AKHIR KONTEKS DOKUMEN ===`;
 
         } else if (kbExists && !ragContext) {
             // ⚠️ MODE AKTIF: KB ada TAPI tidak ada konteks relevan untuk pertanyaan ini
@@ -376,27 +384,31 @@ ${ragContext}
 
 ATURAN PERILAKU:
 
-1. SMALL TALK (sapaan, basa-basi seperti "halo", "hai", "selamat pagi"):
-   → Balas dengan ramah dan jelaskan fungsi Anda.
-   → "Halo! Saya AI chatbot yang siap membantu menjawab pertanyaan berdasarkan dokumen yang tersedia. Silakan ajukan pertanyaan Anda."
+1. SMALL TALK & META QUESTION:
+   → Jawab ramah berdasarkan INFORMASI SISTEM di bawah.
 
-2. META QUESTION (pertanyaan tentang diri Anda seperti "kamu apa?", "siapa kamu?"):
-   → "Saya adalah AI chatbot yang membantu menjawab pertanyaan berdasarkan dokumen yang telah diberikan kepada saya."
+2. SEMUA PERTANYAAN LAINNYA:
+   → Cek dulu apakah pertanyaan bisa dijawab dari INFORMASI SISTEM.
+   → Jika tidak ada di sana, balas jujur: "Saya tidak menemukan informasi spesifik mengenai hal tersebut dalam basis pengetahuan saya. Coba tanyakan dengan kata-kata berbeda."
+   → JANGAN menjawab dari pengetahuan umum di luar informasi sistem.
 
-3. SEMUA PERTANYAAN LAINNYA:
-   → Informasi spesifik untuk pertanyaan ini tidak ditemukan dalam basis pengetahuan.
-   → Balas dengan jujur: "Saya tidak menemukan informasi spesifik mengenai hal tersebut dalam basis pengetahuan saya. Apakah Anda bisa memberikan lebih detail atau mencoba menanyakan dengan kata-kata yang berbeda?"
-   → JANGAN menjawab dari pengetahuan umum.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.
 
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.`;
+=== INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
+${BUILT_IN_KNOWLEDGE}
+=== AKHIR INFORMASI SISTEM ===`;
 
         } else {
-            // 🔓 MODE STANDBY: KB kosong — belum ada dokumen diupload
+            // 🔓 MODE STANDBY: KB aktif tapi kosong — belum ada dokumen diupload
             systemPrompt = `Anda adalah AI chatbot bernama Arise.
-Saat ini belum ada dokumen yang dikonfigurasi.
-Untuk pertanyaan apapun, sampaikan: "Sistem saya belum memiliki dokumen yang dikonfigurasi. Silakan hubungi administrator untuk mengatur basis pengetahuan terlebih dahulu."
-Untuk sapaan/small talk, jawab ramah dan jelaskan situasi ini.
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.`;
+Basis pengetahuan pengguna saat ini kosong (belum ada dokumen yang diunggah).
+Untuk pertanyaan teknis tentang Arise, gunakan INFORMASI SISTEM di bawah.
+Untuk pertanyaan lain di luar informasi sistem: "Basis pengetahuan Anda masih kosong. Silakan upload dokumen terlebih dahulu di panel Kostumisasi AI."
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.
+
+=== INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
+${BUILT_IN_KNOWLEDGE}
+=== AKHIR INFORMASI SISTEM ===`;
         }
 
         // Buat data stream yang mengirim citations SEBELUM teks AI dimulai,

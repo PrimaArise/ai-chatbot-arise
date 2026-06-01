@@ -22,27 +22,12 @@ export async function GET() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        const roleRows = await prisma.$queryRaw<{ role: string }[]>`
-            SELECT role FROM "User" WHERE id = ${user.id} LIMIT 1
+        const docs = await prisma.$queryRaw<{ id: string; content: string; createdAt: Date; userId: string; source: string }[]>`
+            SELECT id, content, "createdAt", "userId", source
+            FROM "Document"
+            WHERE "userId" = ${user.id}
+            ORDER BY source ASC, "createdAt" DESC
         `;
-        const isAdmin = roleRows?.[0]?.role === 'admin';
-
-        let docs: { id: string; content: string; createdAt: Date; userId: string; isGlobal: boolean; source: string }[];
-
-        if (isAdmin) {
-            docs = await prisma.$queryRaw`
-                SELECT id, content, "createdAt", "userId", "isGlobal", source
-                FROM "Document"
-                ORDER BY source ASC, "isGlobal" DESC, "createdAt" DESC
-            `;
-        } else {
-            docs = await prisma.$queryRaw`
-                SELECT id, content, "createdAt", "userId", "isGlobal", source
-                FROM "Document"
-                WHERE "userId" = ${user.id} OR "isGlobal" = true
-                ORDER BY source ASC, "isGlobal" DESC, "createdAt" DESC
-            `;
-        }
 
         return NextResponse.json(docs);
     } catch (error) {
@@ -59,15 +44,9 @@ export async function POST(req: Request) {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        const roleRows = await prisma.$queryRaw<{ role: string }[]>`
-            SELECT role FROM "User" WHERE id = ${user.id} LIMIT 1
-        `;
-        const isAdmin = roleRows?.[0]?.role === 'admin';
-
-        const body = await req.json() as { content?: string; source?: string; isGlobal?: boolean };
+        const body = await req.json() as { content?: string; source?: string };
         const content = body.content?.trim();
         const source = body.source?.trim() || 'manual-input';
-        const isGlobal = isAdmin && body.isGlobal === true;
 
         if (!content) {
             return NextResponse.json({ error: 'Konten tidak boleh kosong.' }, { status: 400 });
@@ -87,14 +66,13 @@ export async function POST(req: Request) {
         const vectorString = `[${embedding.join(',')}]`;
 
         await prisma.$executeRaw`
-            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", "isGlobal", source)
+            INSERT INTO "Document" (id, content, embedding, "createdAt", "userId", source)
             VALUES (
                 gen_random_uuid()::text,
                 ${content},
                 ${vectorString}::vector(3072),
                 NOW(),
                 ${user.id},
-                ${isGlobal},
                 ${source}
             )
         `;
@@ -111,17 +89,12 @@ export async function POST(req: Request) {
 
 // ================= PATCH /api/documents =================
 // Mode 1: ?id=xxx            → edit konten chunk (re-embed)
-// Mode 2: ?renameGroup=name  → rename semua chunk dalam grup (update source)
+// Mode 2: ?renameGroup=name  → rename semua chunk dalam grup
 export async function PATCH(req: Request) {
     try {
         const supabase = await getSupabaseServer();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-        const roleRows = await prisma.$queryRaw<{ role: string }[]>`
-            SELECT role FROM "User" WHERE id = ${user.id} LIMIT 1
-        `;
-        const isAdmin = roleRows?.[0]?.role === 'admin';
 
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
@@ -141,8 +114,7 @@ export async function PATCH(req: Request) {
             // Cek konflik nama
             const conflict = await prisma.$queryRaw<{ cnt: bigint }[]>`
                 SELECT COUNT(*)::bigint as cnt FROM "Document"
-                WHERE source = ${newSource}
-                  AND ("userId" = ${user.id} OR "isGlobal" = true)
+                WHERE source = ${newSource} AND "userId" = ${user.id}
             `;
             if (Number(conflict[0]?.cnt ?? 0) > 0) {
                 return NextResponse.json({
@@ -150,33 +122,18 @@ export async function PATCH(req: Request) {
                 }, { status: 409 });
             }
 
-            // Update source
-            let count = 0;
-            if (isAdmin) {
-                const res = await prisma.$queryRaw<{ cnt: bigint }[]>`
-                    WITH upd AS (
-                        UPDATE "Document" SET source = ${newSource}
-                        WHERE source = ${renameGroup}
-                        RETURNING id
-                    ) SELECT COUNT(*)::bigint as cnt FROM upd
-                `;
-                count = Number(res[0]?.cnt ?? 0);
-            } else {
-                const res = await prisma.$queryRaw<{ cnt: bigint }[]>`
-                    WITH upd AS (
-                        UPDATE "Document" SET source = ${newSource}
-                        WHERE source = ${renameGroup}
-                          AND "userId" = ${user.id}
-                          AND "isGlobal" = false
-                        RETURNING id
-                    ) SELECT COUNT(*)::bigint as cnt FROM upd
-                `;
-                count = Number(res[0]?.cnt ?? 0);
-            }
+            const res = await prisma.$queryRaw<{ cnt: bigint }[]>`
+                WITH upd AS (
+                    UPDATE "Document" SET source = ${newSource}
+                    WHERE source = ${renameGroup} AND "userId" = ${user.id}
+                    RETURNING id
+                ) SELECT COUNT(*)::bigint as cnt FROM upd
+            `;
+            const count = Number(res[0]?.cnt ?? 0);
 
             if (count === 0) {
                 return NextResponse.json({
-                    error: 'Tidak ada chunk yang bisa direname (bukan milik Anda atau grup tidak ditemukan).',
+                    error: 'Tidak ada chunk yang bisa direname.',
                 }, { status: 403 });
             }
 
@@ -200,18 +157,13 @@ export async function PATCH(req: Request) {
             return NextResponse.json({ error: 'Konten tidak boleh kosong.' }, { status: 400 });
         }
 
-        const existing = await prisma.$queryRaw<{ id: string; userId: string; isGlobal: boolean }[]>`
-            SELECT id, "userId", "isGlobal" FROM "Document" WHERE id = ${id} LIMIT 1
+        const existing = await prisma.$queryRaw<{ id: string; userId: string }[]>`
+            SELECT id, "userId" FROM "Document" WHERE id = ${id} LIMIT 1
         `;
         if (!existing || existing.length === 0) {
             return NextResponse.json({ error: 'Chunk tidak ditemukan.' }, { status: 404 });
         }
-
-        const chunk = existing[0];
-        if (chunk.isGlobal && !isAdmin) {
-            return NextResponse.json({ error: 'Hanya admin yang dapat mengedit dokumen global.' }, { status: 403 });
-        }
-        if (!chunk.isGlobal && chunk.userId !== user.id && !isAdmin) {
+        if (existing[0].userId !== user.id) {
             return NextResponse.json({ error: 'Chunk ini bukan milik Anda.' }, { status: 403 });
         }
 
@@ -246,65 +198,23 @@ export async function DELETE(req: Request) {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        const roleRows = await prisma.$queryRaw<{ role: string }[]>`
-            SELECT role FROM "User" WHERE id = ${user.id} LIMIT 1
-        `;
-        const isAdmin = roleRows?.[0]?.role === 'admin';
-
         const { searchParams } = new URL(req.url);
         const singleId = searchParams.get('id');
         const sourceGroup = searchParams.get('source');
 
-        async function canDelete(chunkId: string): Promise<{ allowed: boolean; reason?: string }> {
-            const rows = await prisma.$queryRaw<{ userId: string; isGlobal: boolean }[]>`
-                SELECT "userId", "isGlobal" FROM "Document" WHERE id = ${chunkId} LIMIT 1
-            `;
-            if (!rows || rows.length === 0) return { allowed: false, reason: 'Chunk tidak ditemukan.' };
-            const c = rows[0];
-            if (c.isGlobal && !isAdmin) return { allowed: false, reason: 'Hanya admin yang dapat menghapus dokumen global.' };
-            if (!c.isGlobal && c.userId !== user!.id && !isAdmin) return { allowed: false, reason: 'Chunk ini bukan milik Anda.' };
-            return { allowed: true };
-        }
-
         // ── Mode hapus per grup/source ──
         if (sourceGroup) {
-            let groupChunks: { id: string; userId: string; isGlobal: boolean }[];
-            if (isAdmin) {
-                groupChunks = await prisma.$queryRaw<{ id: string; userId: string; isGlobal: boolean }[]>`
-                    SELECT id, "userId", "isGlobal" FROM "Document" WHERE source = ${sourceGroup}
-                `;
-            } else {
-                groupChunks = await prisma.$queryRaw<{ id: string; userId: string; isGlobal: boolean }[]>`
-                    SELECT id, "userId", "isGlobal" FROM "Document"
+            const res = await prisma.$queryRaw<{ cnt: bigint }[]>`
+                WITH del AS (
+                    DELETE FROM "Document"
                     WHERE source = ${sourceGroup} AND "userId" = ${user.id}
-                `;
-            }
-
-            // Cek permission dan kumpulkan IDs yang boleh dihapus
-            const allowedIds: string[] = [];
-            const isAnyGlobal = groupChunks.some(c => c.isGlobal);
-            if (isAnyGlobal && !isAdmin) {
-                return NextResponse.json({ error: 'Hanya admin yang dapat menghapus grup global.' }, { status: 403 });
-            }
-            for (const c of groupChunks) {
-                if (c.isGlobal && !isAdmin) continue;
-                if (!c.isGlobal && c.userId !== user.id && !isAdmin) continue;
-                allowedIds.push(c.id);
-            }
-            if (allowedIds.length === 0) {
-                return NextResponse.json({ error: 'Tidak ada chunk yang dapat dihapus.' }, { status: 403 });
-            }
-
-            // Satu query SQL untuk hapus semua sekaligus
-            const idsLiteral = allowedIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
-            const deleted = await prisma.$executeRawUnsafe(
-                `DELETE FROM "Document" WHERE id = ANY(ARRAY[${idsLiteral}]::text[])`
-            );
-
+                    RETURNING id
+                ) SELECT COUNT(*)::bigint as cnt FROM del
+            `;
+            const deleted = Number(res[0]?.cnt ?? 0);
             return NextResponse.json({
                 success: true,
                 deleted,
-                skipped: groupChunks.length - deleted,
                 message: `${deleted} chunk dari grup "${sourceGroup}" berhasil dihapus.`,
             });
         }
@@ -318,37 +228,25 @@ export async function DELETE(req: Request) {
                 return NextResponse.json({ error: 'Missing id or ids parameter' }, { status: 400 });
             }
 
-            // Validasi permission sekaligus
-            const chunkRows = await prisma.$queryRaw<{ id: string; userId: string; isGlobal: boolean }[]>`
-                SELECT id, "userId", "isGlobal" FROM "Document" WHERE id = ANY(ARRAY[${ids}]::text[])
-            `;
-            const allowedIds: string[] = [];
-            for (const c of chunkRows) {
-                if (c.isGlobal && !isAdmin) continue;
-                if (!c.isGlobal && c.userId !== user.id && !isAdmin) continue;
-                allowedIds.push(c.id);
-            }
-            if (allowedIds.length === 0) {
-                return NextResponse.json({ error: 'Tidak ada chunk yang dapat dihapus.' }, { status: 403 });
-            }
-
-            // Satu query SQL untuk hapus semua sekaligus
-            const idsLiteral = allowedIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+            const idsLiteral = ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
             const deleted = await prisma.$executeRawUnsafe(
-                `DELETE FROM "Document" WHERE id = ANY(ARRAY[${idsLiteral}]::text[])`
+                `DELETE FROM "Document" WHERE id = ANY(ARRAY[${idsLiteral}]::text[]) AND "userId" = '${user.id.replace(/'/g, "''")}'`
             );
 
             return NextResponse.json({
                 success: true,
                 deleted,
-                skipped: ids.length - deleted,
-                message: `${deleted} chunk berhasil dihapus.${ids.length - deleted > 0 ? ` ${ids.length - deleted} dilewati.` : ''}`,
+                message: `${deleted} chunk berhasil dihapus.`,
             });
         }
 
         // ── Mode single ──
-        const { allowed, reason } = await canDelete(singleId);
-        if (!allowed) return NextResponse.json({ error: reason }, { status: 403 });
+        const rows = await prisma.$queryRaw<{ userId: string }[]>`
+            SELECT "userId" FROM "Document" WHERE id = ${singleId} LIMIT 1
+        `;
+        if (!rows || rows.length === 0) return NextResponse.json({ error: 'Chunk tidak ditemukan.' }, { status: 404 });
+        if (rows[0].userId !== user.id) return NextResponse.json({ error: 'Chunk ini bukan milik Anda.' }, { status: 403 });
+
         await prisma.$executeRaw`DELETE FROM "Document" WHERE id = ${singleId}`;
         return NextResponse.json({ success: true, message: `Chunk ${singleId} berhasil dihapus.` });
 

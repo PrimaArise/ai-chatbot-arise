@@ -7,7 +7,7 @@ import { useChat } from '@ai-sdk/react';
 import { useEffect, useRef, useState, memo, Suspense, FormEvent, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Shield, User, Search, Download, RefreshCw, BarChart2, Pencil } from 'lucide-react';
+import { Menu, Plus, Send, MessageSquare, MoreVertical, Edit2, Trash2, X, Check, Copy, Square, LogOut, AlertTriangle, Settings, Upload, FileText, Loader2, ChevronDown, BookOpen, Search, Download, RefreshCw, Pencil } from 'lucide-react';
 import WelcomeScreen from '@/components/WelcomeScreen';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
@@ -143,10 +143,10 @@ function ChatComponent() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isIngesting, setIsIngesting] = useState(false);
   const [ingestResult, setIngestResult] = useState<string | null>(null);
-  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; isGlobal: boolean; userId: string; source: string }[]>([]);
+  const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; userId: string; source: string }[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
-  // deletingChunkId: digunakan di JSX untuk loading state per-item (read-only, selalu null = tidak ada loading)
-  const [deletingChunkId] = useState<string | null>(null);
+  // deletingChunkId: selalu null — loading state per-item dihapus (optimistic delete)
+  const deletingChunkId: string | null = null;
   const [expandedChunkId, setExpandedChunkId] = useState<string | null>(null);
   const [editingChunkId, setEditingChunkId] = useState<string | null>(null);
   const [editChunkContent, setEditChunkContent] = useState('');
@@ -156,8 +156,8 @@ function ChatComponent() {
 
   // ===== Multi-select chunks =====
   const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set());
-  // isBulkDeleting: digunakan di JSX untuk disable tombol (read-only, selalu false = optimistic)
-  const [isBulkDeleting] = useState(false);
+  // isBulkDeleting: selalu false — loading state dihandle optimistically
+  const isBulkDeleting = false;
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
   // ===== Grouping state =====
@@ -181,18 +181,7 @@ function ChatComponent() {
   const [uploadSourceMode, setUploadSourceMode] = useState<'existing' | 'new'>('new');
   const [uploadSourceName, setUploadSourceName] = useState('');
 
-  // ===== User role (admin/user) =====
-  const [userRole, setUserRole] = useState<'admin' | 'user'>('user');
-  const isAdmin = userRole === 'admin';
 
-  // ===== Role change modal =====
-  const [showRoleModal, setShowRoleModal] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [isChangingRole, setIsChangingRole] = useState(false);
-
-  // ===== isGlobal toggle untuk admin saat upload =====
-  const [isGlobalUpload, setIsGlobalUpload] = useState(false);
 
   // ===== Sidebar search =====
   const [chatSearch, setChatSearch] = useState('');
@@ -246,14 +235,6 @@ function ChatComponent() {
     }
   }, [ingestResult]);
 
-  // Ambil role user (admin/user) saat pertama kali komponen dimuat
-  // Role dipakai untuk menentukan akses global upload dokumen
-  useEffect(() => {
-    fetch('/api/me')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.role === 'admin') setUserRole('admin'); })
-      .catch(() => { });
-  }, []);
 
 
   // Countdown timer — hitung mundur detik sampai window rate limit reset
@@ -268,64 +249,6 @@ function ChatComponent() {
     return () => clearInterval(interval);
   }, [rateLimit]);
 
-  // ===== Handler perubahan role via OTP =====
-
-  // Downgrade dari Admin ke User — tidak memerlukan verifikasi tambahan
-  const handleRoleChange = async (targetRole: 'admin' | 'user') => {
-    if (targetRole === 'user') {
-      setIsChangingRole(true);
-      const res = await fetch('/api/me', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetRole: 'user' }),
-      });
-      const result = await res.json();
-      setIsChangingRole(false);
-      if (res.ok) {
-        setUserRole('user');
-        setShowRoleModal(false);
-        toast.success('Role berhasil diubah menjadi User.');
-      } else {
-        toast.error(result.error || 'Gagal mengubah role.');
-      }
-    }
-  };
-
-  // Kirim permintaan OTP ke email admin untuk proses promosi ke Admin
-  const handleRequestOtp = async () => {
-    setIsChangingRole(true);
-    const res = await fetch('/api/promote-request', { method: 'POST' });
-    const result = await res.json();
-    setIsChangingRole(false);
-    if (res.ok) {
-      setOtpSent(true);
-      toast.success('Kode OTP dikirim ke email admin!');
-    } else {
-      toast.error(result.error || 'Gagal mengirim OTP.');
-    }
-  };
-
-  // Verifikasi kode OTP 6-digit dari admin dan ubah role ke Admin jika valid
-  const handleVerifyOtp = async () => {
-    if (otpCode.trim().length !== 6) { toast.error('Kode OTP harus 6 digit.'); return; }
-    setIsChangingRole(true);
-    const res = await fetch('/api/promote-verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ otp: otpCode.trim() }),
-    });
-    const result = await res.json();
-    setIsChangingRole(false);
-    if (res.ok) {
-      setUserRole('admin');
-      setShowRoleModal(false);
-      setOtpCode('');
-      setOtpSent(false);
-      toast.success('✅ Selamat! Anda sekarang menjadi Admin!');
-    } else {
-      toast.error(result.error || 'Kode OTP tidak valid.');
-    }
-  };
 
   // Hook utama Vercel AI SDK untuk streaming chat
   // kbEnabled dikirim ke API sebagai flag apakah RAG aktif atau tidak
@@ -343,6 +266,7 @@ function ChatComponent() {
   // Derive citations langsung dari streamData tanpa useState/useEffect
   // Ini menghindari cascading renders dan mematuhi react-hooks/set-state-in-effect rule
   const lastCitations = useMemo<ChunkCitation[]>(() => {
+    if (!isKbEnabled) return []; // Jangan tampilkan citations saat KB dinonaktifkan
     if (!streamData || streamData.length === 0) return [];
     for (let i = streamData.length - 1; i >= 0; i--) {
       const item = streamData[i] as { type?: string; citations?: ChunkCitation[] };
@@ -353,7 +277,7 @@ function ChatComponent() {
     return [];
     // ruanganId disertakan agar citations reset otomatis saat pindah sesi
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamData, ruanganId]);
+  }, [streamData, ruanganId, isKbEnabled]);
 
   // Fetch rate limit status setiap kali jumlah pesan berubah (setelah kirim/terima)
   // Ditempatkan SETELAH useChat agar `messages` sudah dideklarasikan
@@ -571,12 +495,11 @@ function ChatComponent() {
       try {
         const formData = new FormData();
         formData.append('file', uploadFile);
-        if (isAdmin) formData.append('isGlobal', String(isGlobalUpload));
         const res = await fetch('/api/ingest', { method: 'POST', body: formData });
         const data = await res.json();
         if (res.ok) {
           const skipInfo = data.skipped > 0 ? ` (${data.skipped} duplikat dilewati)` : '';
-          setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke knowledge base${isAdmin && isGlobalUpload ? ' (Global 🌐)' : ' (Pribadi 🔒)'}${skipInfo}.`);
+          setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke knowledge base${skipInfo}.`);
           setUploadText('');
           setUploadFile(null);
           if (fileInputRef.current) fileInputRef.current.value = '';
@@ -597,12 +520,12 @@ function ChatComponent() {
       const res = await fetch('/api/ingest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: uploadText, source: resolvedSource, isGlobal: isAdmin && isGlobalUpload }),
+        body: JSON.stringify({ content: uploadText, source: resolvedSource }),
       });
       const data = await res.json();
       if (res.ok) {
         const skipInfo2 = data.skipped > 0 ? ` (${data.skipped} duplikat dilewati)` : '';
-        setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke grup "${resolvedSource}"${isAdmin && isGlobalUpload ? ' (Global 🌐)' : ''}${skipInfo2}.`);
+        setIngestResult(`✅ Berhasil mengindeks ${data.inserted ?? data.chunks?.length ?? 0} chunk ke grup "${resolvedSource}"${skipInfo2}.`);
         setUploadText('');
         setUploadFile(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -720,14 +643,14 @@ function ChatComponent() {
   };
 
   // Tambah chunk manual ke grup yang ada
-  const handleAddChunkToGroup = async (source: string, isGlobalGroup: boolean) => {
+  const handleAddChunkToGroup = async (source: string) => {
     if (!addChunkContent.trim()) { toast.error('Konten tidak boleh kosong'); return; }
     setIsAddingChunk(true);
     try {
       const res = await fetch('/api/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: addChunkContent.trim(), source, isGlobal: isGlobalGroup }),
+        body: JSON.stringify({ content: addChunkContent.trim(), source }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -751,7 +674,7 @@ function ChatComponent() {
       const res = await fetch('/api/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: addChunkContent.trim(), source: newGroupName.trim(), isGlobal: isAdmin && isGlobalUpload }),
+        body: JSON.stringify({ content: addChunkContent.trim(), source: newGroupName.trim(), isGlobal: false }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -973,93 +896,6 @@ function ChatComponent() {
         </div>
 
         <div className="p-4 border-t border-neutral-800 shrink-0 w-64 bg-neutral-900 space-y-2">
-          {/* Role Badge — klik untuk ubah role */}
-          <button
-            onClick={() => { setShowRoleModal(v => !v); setOtpCode(''); setOtpSent(false); }}
-            className={`w-full flex items-center gap-2 py-2 px-3 rounded-xl border transition-all cursor-pointer ${isAdmin
-              ? 'bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'
-              : 'bg-neutral-800/60 border-neutral-700 hover:bg-neutral-800'
-              }`}
-          >
-            <span className={`text-xs font-medium ${isAdmin ? 'text-amber-500' : 'text-neutral-500'}`}>Role :</span>
-            {isAdmin
-              ? <Shield size={13} className="text-amber-400" />
-              : <User size={13} className="text-neutral-400" />
-            }
-            <span className={`text-xs font-bold tracking-wider uppercase ${isAdmin ? 'text-amber-400' : 'text-neutral-400'}`}>
-              {isAdmin ? 'Admin' : 'User'}
-            </span>
-            <ChevronDown size={11} className={`ml-auto transition-transform ${showRoleModal ? 'rotate-180' : ''} ${isAdmin ? 'text-amber-500/60' : 'text-neutral-600'}`} />
-          </button>
-
-          {/* Role Change Panel */}
-          {showRoleModal && (
-            <div className={`rounded-xl border p-3 space-y-2.5 ${isAdmin ? 'bg-neutral-950 border-amber-500/20' : 'bg-neutral-950 border-neutral-700'}`}>
-              {isAdmin ? (
-                // Admin → demote ke user (tidak perlu verifikasi)
-                <>
-                  <p className="text-xs text-neutral-400">Ubah role Anda menjadi <span className="text-neutral-200 font-medium">User</span>. Akses admin akan dicabut.</p>
-                  <button
-                    onClick={() => handleRoleChange('user')}
-                    disabled={isChangingRole}
-                    className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-neutral-800 hover:bg-red-500/10 border border-neutral-700 hover:border-red-500/30 text-neutral-300 hover:text-red-300 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    {isChangingRole
-                      ? <Loader2 size={12} className="animate-spin" />
-                      : <User size={12} />}
-                    Demote ke User
-                  </button>
-                </>
-              ) : (
-                // User → promote ke admin via OTP email
-                <>
-                  {!otpSent ? (
-                    <>
-                      <p className="text-xs text-neutral-400">Untuk menjadi <span className="text-amber-400 font-medium">Admin</span>, kirim permintaan ke pengelola sistem. Kode OTP akan dikirim ke email admin.</p>
-                      <button
-                        onClick={handleRequestOtp}
-                        disabled={isChangingRole}
-                        className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-                      >
-                        {isChangingRole ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                        Kirim Permintaan ke Admin
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-green-400">✅ Kode OTP dikirim ke email admin. Minta kodenya lalu masukkan di bawah.</p>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={6}
-                        placeholder="Masukkan 6 digit kode..."
-                        value={otpCode}
-                        onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                        className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 focus:border-amber-500/50 rounded-lg text-sm text-center text-neutral-200 placeholder-neutral-600 outline-none transition-colors tracking-widest font-mono"
-                      />
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => { setOtpSent(false); setOtpCode(''); }}
-                          className="flex-1 py-2 px-3 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-400 rounded-lg text-xs transition-all cursor-pointer"
-                        >
-                          Kirim Ulang
-                        </button>
-                        <button
-                          onClick={handleVerifyOtp}
-                          disabled={isChangingRole || otpCode.length !== 6}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-                        >
-                          {isChangingRole ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                          Verifikasi
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-
           {/* Kostumisasi AI Button */}
           <button
             onClick={openKostumiModal}
@@ -1067,15 +903,6 @@ function ChatComponent() {
           >
             <Settings size={16} />
             <span>Kostumisasi AI</span>
-          </button>
-
-          {/* Dashboard Link */}
-          <button
-            onClick={() => window.location.href = '/dashboard'}
-            className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-300 py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap cursor-pointer border border-neutral-700"
-          >
-            <BarChart2 size={15} />
-            <span>Dashboard</span>
           </button>
 
           {/* Logout Button */}
@@ -1452,22 +1279,6 @@ function ChatComponent() {
                       }
                     </span>
                     <div className="flex items-center gap-2">
-                      {/* Toggle Global/Pribadi — hanya tampil untuk admin (berlaku untuk file DAN teks) */}
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => setIsGlobalUpload(v => !v)}
-                          className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded-lg border transition-all cursor-pointer ${
-                            isGlobalUpload
-                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                              : 'bg-blue-600/10 border-blue-500/30 text-blue-400'
-                          }`}
-                          title={isGlobalUpload ? 'Dokumen akan tersedia untuk semua user' : 'Klik untuk jadikan dokumen global'}
-                        >
-                          <Shield size={11} />
-                          {isGlobalUpload ? 'Global' : 'Pribadi'}
-                        </button>
-                      )}
                       <button
                         onClick={handleIngest}
                         disabled={isIngesting || (!uploadText.trim() && !uploadFile)}
@@ -1560,41 +1371,20 @@ function ChatComponent() {
                           </div>
                         </div>
 
-                         {/* Group cards — Global dulu, lalu Pribadi */}
-                        {[
-                          ...groupKeys.filter(k => groups[k].some(c => c.isGlobal)),
-                          ...groupKeys.filter(k => !groups[k].some(c => c.isGlobal)),
-                        ].map((groupKey, idx, arr) => {
+                        {/* Group cards */}
+                        {groupKeys.map((groupKey) => {
                           const groupChunks = groups[groupKey];
                           const isExpanded = expandedGroupId === groupKey;
-                          const isGlobalGroup = groupChunks.some(c => c.isGlobal);
                           const selectedInGroup = groupChunks.filter(c => selectedChunkIds.has(c.id)).length;
                           const allInGroupSelected = selectedInGroup === groupChunks.length;
                           const isDeletingThisGroup = deletingGroupSource === groupKey;
                           const isRenaming = renamingGroup === groupKey;
-                          const prevKey = arr[idx - 1];
-                          const prevIsGlobal = prevKey ? groups[prevKey].some(c => c.isGlobal) : null;
-                          const showDivider = idx > 0 && prevIsGlobal && !isGlobalGroup;
 
                           return (
                             <div key={groupKey} className="mb-2">
-                              {idx === 0 && isGlobalGroup && (
-                                <div className="flex items-center gap-2 mb-2">
-                                  <div className="flex-1 h-px bg-neutral-800" />
-                                  <span className="text-[10px] text-neutral-600 shrink-0">Global</span>
-                                  <div className="flex-1 h-px bg-neutral-800" />
-                                </div>
-                              )}
-                              {showDivider && (
-                                <div className="flex items-center gap-2 mb-2">
-                                  <div className="flex-1 h-px bg-neutral-800" />
-                                  <span className="text-[10px] text-neutral-600 shrink-0">Pribadi</span>
-                                  <div className="flex-1 h-px bg-neutral-800" />
-                                </div>
-                              )}
-                              <div className={`border rounded-xl overflow-hidden transition-all ${isExpanded ? 'border-blue-500/30' : isGlobalGroup ? 'border-amber-500/20' : 'border-neutral-800'}`}>
+                              <div className={`border rounded-xl overflow-hidden transition-all ${isExpanded ? 'border-blue-500/30' : 'border-neutral-800'}`}>
                                 {/* Group Header */}
-                                <div className={`flex items-center gap-2 px-3 py-2.5 ${isGlobalGroup ? 'bg-amber-500/5' : 'bg-neutral-950/80'}`}>
+                                <div className="flex items-center gap-2 px-3 py-2.5 bg-neutral-950/80">
                                   {/* Checkbox */}
                                   <button onClick={() => toggleSelectGroup(groupChunks)} className="shrink-0 cursor-pointer">
                                     <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${allInGroupSelected ? 'bg-blue-600 border-blue-600' : selectedInGroup > 0 ? 'bg-blue-600/40 border-blue-500' : 'border-neutral-600 hover:border-blue-500'}`}>
@@ -1622,22 +1412,20 @@ function ChatComponent() {
                                   ) : (
                                     <button onClick={() => setExpandedGroupId(isExpanded ? null : groupKey)} className="flex items-center gap-2 flex-1 text-left min-w-0 cursor-pointer">
                                       <ChevronDown size={14} className={`shrink-0 text-neutral-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                                      <FileText size={14} className={`shrink-0 ${isGlobalGroup ? 'text-amber-400' : 'text-blue-400'}`} />
+                                      <FileText size={14} className="shrink-0 text-blue-400" />
                                       <span className="font-medium text-sm text-neutral-200 truncate">{groupKey}</span>
                                       <span className="shrink-0 text-[10px] text-neutral-500 bg-neutral-800 px-1.5 py-0.5 rounded-full">{groupChunks.length} chunk</span>
-                                      {isGlobalGroup && <span className="hidden sm:inline shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">GLOBAL</span>}
                                     </button>
                                   )}
-
                                   {!isRenaming && (
                                     <>
-                                      <button onClick={e => { e.stopPropagation(); setRenamingGroup(groupKey); setRenameGroupValue(groupKey); }} disabled={isGlobalGroup && !isAdmin} className={`shrink-0 p-1.5 rounded-lg transition-colors cursor-pointer ${isGlobalGroup && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-500 hover:text-yellow-400 hover:bg-yellow-500/10'}`} title="Rename grup">
+                                      <button onClick={e => { e.stopPropagation(); setRenamingGroup(groupKey); setRenameGroupValue(groupKey); }} className="shrink-0 p-1.5 text-neutral-500 hover:text-yellow-400 hover:bg-yellow-500/10 rounded-lg transition-colors cursor-pointer" title="Rename grup">
                                         <Pencil size={13} />
                                       </button>
                                       <button onClick={e => { e.stopPropagation(); setAddChunkGroup(addChunkGroup === groupKey ? null : groupKey); setAddChunkContent(''); setExpandedGroupId(groupKey); }} className="shrink-0 p-1.5 text-neutral-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors cursor-pointer" title="Tambah chunk">
                                         <Plus size={14} />
                                       </button>
-                                      <button onClick={e => { e.stopPropagation(); setShowGroupDeleteConfirm(groupKey); }} disabled={isDeletingThisGroup || (isGlobalGroup && !isAdmin)} className={`shrink-0 p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-40 ${isGlobalGroup && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-500 hover:text-red-400 hover:bg-red-500/10'}`} title="Hapus grup">
+                                      <button onClick={e => { e.stopPropagation(); setShowGroupDeleteConfirm(groupKey); }} disabled={isDeletingThisGroup} className="shrink-0 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer disabled:opacity-40" title="Hapus grup">
                                         {isDeletingThisGroup ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                                       </button>
                                     </>
@@ -1653,7 +1441,7 @@ function ChatComponent() {
                                         <textarea value={addChunkContent} onChange={e => setAddChunkContent(e.target.value)} rows={4} placeholder="Konten chunk baru..." className="w-full bg-neutral-950 border border-neutral-700 focus:border-blue-500/60 rounded-lg p-3 text-xs text-neutral-200 placeholder-neutral-600 focus:outline-none resize-none transition-colors" />
                                         <div className="flex gap-2 mt-2 justify-end">
                                           <button onClick={() => { setAddChunkGroup(null); setAddChunkContent(''); }} className="px-3 py-1.5 text-xs text-neutral-400 border border-neutral-700 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer">Batal</button>
-                                          <button onClick={() => handleAddChunkToGroup(groupKey, isGlobalGroup)} disabled={isAddingChunk || !addChunkContent.trim()} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer">
+                                          <button onClick={() => handleAddChunkToGroup(groupKey)} disabled={isAddingChunk || !addChunkContent.trim()} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer">
                                             {isAddingChunk ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
                                             {isAddingChunk ? 'Menambahkan...' : 'Tambah Chunk'}
                                           </button>
@@ -1672,10 +1460,10 @@ function ChatComponent() {
                                             <ChevronDown size={12} className={`shrink-0 text-neutral-600 transition-transform ${expandedChunkId === chunk.id ? 'rotate-180' : ''}`} />
                                             <span className="text-xs text-neutral-400 truncate">{chunk.content.slice(0, 90)}...</span>
                                           </button>
-                                          <button onClick={() => { if (chunk.isGlobal && !isAdmin) { toast.error('Hanya admin yang dapat mengedit chunk global.'); return; } openEditChunk(chunk); }} className={`shrink-0 p-1 rounded transition-colors cursor-pointer ${chunk.isGlobal && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-600 hover:text-blue-400 hover:bg-blue-500/10'}`}>
+                                          <button onClick={() => openEditChunk(chunk)} className="shrink-0 p-1 text-neutral-600 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors cursor-pointer">
                                             <Edit2 size={12} />
                                           </button>
-                                          <button onClick={() => { if (chunk.isGlobal && !isAdmin) { toast.error('Hanya admin yang dapat menghapus chunk global.'); return; } handleDeleteChunk(chunk.id); }} disabled={deletingChunkId === chunk.id} className={`shrink-0 p-1 rounded transition-colors cursor-pointer disabled:opacity-50 ${chunk.isGlobal && !isAdmin ? 'text-neutral-700 cursor-not-allowed' : 'text-neutral-600 hover:text-red-400 hover:bg-red-500/10'}`}>
+                                          <button onClick={() => handleDeleteChunk(chunk.id)} disabled={deletingChunkId === chunk.id} className="shrink-0 p-1 text-neutral-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors cursor-pointer disabled:opacity-50">
                                             {deletingChunkId === chunk.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                                           </button>
                                         </div>
@@ -1867,17 +1655,6 @@ function ChatComponent() {
                 <textarea value={addChunkContent} onChange={e => setAddChunkContent(e.target.value)} rows={7} placeholder="Masukkan konten chunk pertama untuk grup ini..." className="w-full bg-neutral-950 border border-neutral-800 focus:border-blue-500/60 rounded-xl p-4 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none resize-none transition-colors" />
                 <p className="text-xs text-neutral-600 mt-1 text-right">{addChunkContent.trim().split(/\s+/).filter(Boolean).length} kata · ≈{Math.ceil(addChunkContent.length / 4)} token</p>
               </div>
-              {isAdmin && (
-                <div className="flex items-center justify-between p-3 bg-neutral-950 border border-neutral-800 rounded-xl">
-                  <div>
-                    <p className="text-xs font-medium text-neutral-300">Jadikan Global</p>
-                    <p className="text-[11px] text-neutral-600 mt-0.5">Chunk dapat diakses semua user</p>
-                  </div>
-                  <button type="button" onClick={() => setIsGlobalUpload(v => !v)} className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${isGlobalUpload ? 'bg-amber-500' : 'bg-neutral-700'}`}>
-                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${isGlobalUpload ? 'translate-x-4' : 'translate-x-0'}`} />
-                  </button>
-                </div>
-              )}
             </div>
             <div className="flex gap-3 p-5 border-t border-neutral-800 shrink-0">
               <button onClick={() => { setShowNewGroupModal(false); setNewGroupName(''); setAddChunkContent(''); }} disabled={isAddingChunk} className="flex-1 px-4 py-2.5 rounded-xl border border-neutral-700 text-neutral-300 hover:bg-neutral-800 font-medium text-sm transition-colors cursor-pointer disabled:opacity-50">Batal</button>
