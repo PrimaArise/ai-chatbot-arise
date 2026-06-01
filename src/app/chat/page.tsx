@@ -778,9 +778,9 @@ function ChatComponent() {
             <Plus size={16} className="text-neutral-400" />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 w-full">
-          {/* Search riwayat chat */}
-          <div className="relative mb-2">
+        {/* Search riwayat chat — tetap di atas, tidak ikut scroll */}
+        <div className="px-3 pb-2 shrink-0">
+          <div className="relative">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600" />
             <input
               type="text"
@@ -795,7 +795,8 @@ function ChatComponent() {
               </button>
             )}
           </div>
-
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 pt-0 space-y-1 w-full">
           {(chatSearch ? chatList.filter(c => c.title.toLowerCase().includes(chatSearch.toLowerCase())) : chatList).map((chat) => (
             <div key={chat.id} className="relative group">
               {editingChatId === chat.id ? (
