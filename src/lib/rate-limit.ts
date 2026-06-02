@@ -1,12 +1,18 @@
 /**
  * In-memory rate limiter.
- * 20 requests per 60 seconds per userId.
+ * 20 requests per 24 jam per userId.
+ *
+ * Disesuaikan dengan Groq free-tier TPD:
+ *  - llama-3.3-70b-versatile: 100.000 token/hari
+ *  - Rata-rata ~2.000 token/respons → max ~50 request/hari (shared semua user)
+ *  - Limit 20/user/hari memberi ruang yang aman untuk beberapa user sekaligus
+ *
  * Note: Works for single-server deployment.
  * For multi-instance production, use Upstash Redis.
  */
 const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
-export const RATE_LIMIT_MAX = 20;
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 menit
+export const RATE_LIMIT_MAX = 40; // 100K TPD / ~1.800 token/respons ≈ 55 max → ambil 40 dengan buffer 25%
+const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 jam
 
 export function checkRateLimit(userId: string): {
     allowed: boolean;

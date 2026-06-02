@@ -36,15 +36,17 @@ const RAG_FALLBACK_THRESHOLD = 0.68;
 
 /**
  * Jumlah chunk RAG yang diambil (top-k).
- * Dinaikkan 5 → 8 agar informasi yang tersebar di banyak chunk tetap tercakup.
+ * Dikurangi 8 → 5: chunk ke-6,7,8 yang jauh dari query menambah noise
+ * dan meningkatkan risiko hallucination pada model.
  */
-const RAG_TOP_K = 8;
+const RAG_TOP_K = 5;
 
 /**
  * Jumlah pesan user terakhir yang digabung sebagai query RAG.
- * Membantu ketika pertanyaan singkat tapi konteks ada di pesan sebelumnya.
+ * Dikurangi 3 → 2: lebih fokus ke pertanyaan terkini,
+ * mengurangi drift topik dari konteks percakapan sebelumnya.
  */
-const RAG_QUERY_WINDOW = 3;
+const RAG_QUERY_WINDOW = 2;
 
 // ============================================================
 // HELPERS
@@ -101,7 +103,8 @@ interface ChunkCitation {
 async function expandQuery(rawQuery: string): Promise<string> {
     try {
         const { text } = await generateText({
-            model: groq('llama-3.3-70b-versatile'),
+            // ⚡ Model kecil cukup untuk query expansion — hemat TPD 70B untuk chat utama
+            model: groq('llama-3.1-8b-instant'),
             system: `You are a search query optimizer for a RAG document retrieval system.
 Your task is to rewrite a user's question into a rich, technical search query that maximizes the chance of matching relevant document chunks — especially when the user uses informal, colloquial, or non-technical language.
 
@@ -262,10 +265,10 @@ export async function POST(req: Request) {
         // ⏱️ Rate limiting: 20 request per menit per user
         const rl = checkRateLimit(user.id);
         if (!rl.allowed) {
-            const seconds = Math.ceil(rl.resetInMs / 1000);
+            const jam = Math.ceil(rl.resetInMs / (1000 * 60 * 60));
             return NextResponse.json(
-                { error: `Terlalu banyak permintaan. Coba lagi dalam ${seconds} detik.` },
-                { status: 429, headers: { 'Retry-After': String(seconds) } }
+                { error: `Batas pesan harian tercapai (20 pesan/hari). Kuota akan reset dalam ${jam} jam.` },
+                { status: 429, headers: { 'Retry-After': String(Math.ceil(rl.resetInMs / 1000)) } }
             );
         }
 
@@ -310,7 +313,8 @@ export async function POST(req: Request) {
         // 🔥 Fitur Judul Cerdas (Berjalan diam-diam di background)
         if (isNewChat && lastUserMessage?.content) {
             generateText({
-                model: groq('llama-3.3-70b-versatile'),
+                // ⚡ Model kecil cukup untuk generate judul — hemat TPD 70B
+                model: groq('llama-3.1-8b-instant'),
                 system: 'Anda adalah asisten perangkum. Buatlah judul super singkat (maksimal 3 kata) yang mencerminkan inti topik dari pesan pengguna. Jangan gunakan tanda kutip, titik, atau gaya kutipan.',
                 prompt: lastUserMessage.content,
             }).then(async ({ text }) => {
@@ -340,6 +344,11 @@ export async function POST(req: Request) {
             ? await retrieveRelevantContext(rawMessages, user.id)
             : { context: '', citations: [], isStrictMatch: false };
 
+        // 🌡️ Temperature adaptif:
+        //   KB ON  → 0.3 (cukup strict untuk factual, tidak freeze di Groq seperti 0.1)
+        //   KB OFF → 0.7 (natural, kreatif, cocok untuk percakapan bebas)
+        const chatTemperature = useKB ? 0.3 : 0.7;
+
         // 📋 Bangun system prompt berdasarkan mode
         let systemPrompt: string;
 
@@ -364,10 +373,14 @@ ${BUILT_IN_KNOWLEDGE}
 
             systemPrompt = `Anda adalah Arise, asisten berbasis dokumen. Anda menjawab pertanyaan HANYA berdasarkan dokumen yang tersedia.
 ${fallbackNote}
-⛔ LARANGAN KERAS:
+⛔ LARANGAN KERAS — TIDAK ADA PENGECUALIAN:
 - DILARANG menggunakan pengetahuan training model untuk menjawab pertanyaan substantif.
-- DILARANG menambahkan fakta, data, atau informasi yang tidak ada dalam KONTEKS DOKUMEN di bawah.
-- Jika konteks dokumen tidak cukup menjawab pertanyaan → wajib gunakan kalimat penolakan.
+- DILARANG menambahkan fakta, data, angka, atau informasi yang tidak ada dalam KONTEKS DOKUMEN di bawah.
+- DILARANG KERAS menyebut nama produk, merek, brand, software, atau contoh spesifik yang TIDAK tercantum secara eksplisit di dokumen,
+  walaupun Anda mengetahui jawabannya dari pengetahuan umum.
+- Jika dokumen menyebut suatu KONSEP (misalnya: "antivirus", "firewall", "enkripsi") tapi tidak memberi contoh spesifik →
+  JANGAN tambahkan contoh dari pengetahuan Anda. Cukup sampaikan apa yang ada di dokumen, lalu gunakan kalimat penolakan untuk bagian yang tidak ada.
+- Riwayat percakapan sebelumnya BUKAN sumber fakta — hanya KONTEKS DOKUMEN yang menjadi acuan.
 
 ✅ CARA MERESPONS:
 1. Sapaan / small talk ("halo", "selamat pagi", dll.)
@@ -375,12 +388,14 @@ ${fallbackNote}
 2. Pertanyaan tentang sistem Arise ("kamu siapa?", "kamu bisa apa?")
    → Jawab berdasarkan INFORMASI SISTEM di bawah.
 3. Pertanyaan yang dapat dijawab dari KONTEKS DOKUMEN
-   → Evaluasi konteks: apakah ada informasi yang relevan dengan pertanyaan ini, bahkan secara tidak langsung?
-   → Jika ya: jawab berdasarkan dokumen. Hubungkan informasi yang tersebar. Jangan sebut "dokumen" atau "referensi".
-   → Jika TIDAK ada di konteks: gunakan kalimat penolakan (jangan jawab dari pengetahuan umum).
+   → Cek apakah konteks berisi informasi yang secara EKSPLISIT menjawab pertanyaan.
+   → Jika ya: jawab hanya dari isi dokumen. Jangan sebut "dokumen" atau "referensi" kepada user.
+   → Jika TIDAK ada di konteks: gunakan kalimat penolakan.
+   → Jika konteks ada tapi TIDAK cukup (misalnya hanya menyebut konsep tanpa detail/contoh yang ditanyakan):
+      → Sampaikan apa yang ada di dokumen, lalu tambahkan kalimat penolakan untuk bagian yang tidak ada.
 
-✅ KALIMAT PENOLAKAN (gunakan jika konteks tidak menjawab pertanyaan):
-"Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia."
+✅ KALIMAT PENOLAKAN (gunakan jika konteks tidak cukup menjawab):
+"Maaf, dokumen tidak menyebutkan informasi spesifik mengenai hal tersebut."
 
 PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama.
 
@@ -437,6 +452,8 @@ ${BUILT_IN_KNOWLEDGE}
                     model: groq('llama-3.3-70b-versatile'),
                     system: systemPrompt,
                     messages,
+                    temperature: chatTemperature, // 0.1 = KB aktif (strict), 0.7 = KB nonaktif (natural)
+                    maxRetries: 2, // auto-retry saat Groq mengembalikan empty output atau transient error
                     experimental_transform: smoothStream({ delayInMs: 20 }),
                     onFinish: async ({ text }) => {
                         try {
@@ -452,7 +469,8 @@ ${BUILT_IN_KNOWLEDGE}
                         }
                     },
                     onError: (err) => {
-                        console.error("Error groq AI stream:", err);
+                        const msg = err instanceof Error ? err.message : String(err);
+                        console.error("[streamText] Groq error:", msg);
                     }
                 });
 

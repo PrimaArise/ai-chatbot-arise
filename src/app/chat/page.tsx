@@ -196,6 +196,9 @@ function ChatComponent() {
   type RateLimitStatus = { used: number; remaining: number; max: number; resetInMs: number; resetsAt: number };
   const [rateLimit, setRateLimit] = useState<RateLimitStatus | null>(null);
   const [rlCountdown, setRlCountdown] = useState(0);
+  // Ref untuk mencegah toast peringatan muncul berulang kali
+  const hasWarnedLow = useRef(false);
+  const hasWarnedOut = useRef(false);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -235,22 +238,46 @@ function ChatComponent() {
     }
   }, [ingestResult]);
 
-
-
-  // Countdown timer — hitung mundur detik sampai window rate limit reset
+  // Countdown timer — hitung mundur JAM sampai window rate limit harian reset
   useEffect(() => {
     if (!rateLimit || rateLimit.used === 0) return;
     const tick = () => {
-      const sisa = Math.max(0, Math.ceil((rateLimit.resetsAt - Date.now()) / 1000));
-      setRlCountdown(sisa);
+      const sisaJam = Math.max(0, Math.ceil((rateLimit.resetsAt - Date.now()) / (1000 * 60 * 60)));
+      setRlCountdown(sisaJam);
     };
     tick();
-    const interval = setInterval(tick, 1000);
+    const interval = setInterval(tick, 60 * 1000); // update tiap menit cukup (window harian)
     return () => clearInterval(interval);
   }, [rateLimit]);
 
 
-  // Hook utama Vercel AI SDK untuk streaming chat
+  // Peringatan toast saat rate limit mendekati / mencapai batas
+  useEffect(() => {
+    if (!rateLimit) return;
+    // Reset flag saat window baru dimulai (kuota sudah fresh)
+    if (rateLimit.remaining === rateLimit.max) {
+      hasWarnedLow.current = false;
+      hasWarnedOut.current = false;
+      return;
+    }
+    // Peringatan awal: sisa 5 pesan
+    if (rateLimit.remaining <= 5 && rateLimit.remaining > 0 && !hasWarnedLow.current) {
+      hasWarnedLow.current = true;
+      toast(`⚠️ Hanya tersisa ${rateLimit.remaining} pesan hari ini. Gunakan dengan bijak.`, {
+        duration: 6000,
+        style: { background: '#78350f', color: '#fef3c7', border: '1px solid #f59e0b' },
+        icon: '⚠️',
+      });
+    }
+    // Peringatan kritis: kuota habis
+    if (rateLimit.remaining === 0 && !hasWarnedOut.current) {
+      hasWarnedOut.current = true;
+      toast.error(
+        `Kuota pesan harian habis (${rateLimit.max} pesan/hari). Coba lagi dalam ${rlCountdown} jam.`,
+        { duration: 10000, id: 'rl-out' }
+      );
+    }
+  }, [rateLimit, rlCountdown]);
   // kbEnabled dikirim ke API sebagai flag apakah RAG aktif atau tidak
   const { messages, input, handleInputChange, handleSubmit: originalSubmit, setMessages, stop, isLoading, append, data: streamData, setInput } = useChat({
     body: {
@@ -1016,16 +1043,20 @@ function ChatComponent() {
               </div>
               <div className="max-w-4xl mx-auto bg-neutral-900 border border-neutral-800 rounded-2xl p-2 shadow-lg">
                 <form onSubmit={(e) => {
+                  if (rateLimit?.remaining === 0) { e.preventDefault(); return; }
                   handleCustomSubmit(e);
                   const ta = e.currentTarget.querySelector('textarea');
                   if (ta) ta.style.height = 'auto';
                 }} className="flex gap-2 items-end">
                   <textarea
-                    className="flex-1 p-3 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none min-h-[48px] max-h-[200px] overflow-y-auto"
+                    className={`flex-1 p-3 bg-transparent text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none min-h-[48px] max-h-[200px] overflow-y-auto ${
+                      rateLimit?.remaining === 0 ? 'opacity-40 cursor-not-allowed' : ''
+                    }`}
                     value={input}
-                    placeholder="Minta AI..."
+                    placeholder={rateLimit?.remaining === 0 ? 'Kuota harian habis. Coba lagi besok.' : 'Minta AI...'}
                     onChange={handleInputChange}
                     rows={1}
+                    disabled={rateLimit?.remaining === 0}
                     onInput={(e) => {
                       const target = e.target as HTMLTextAreaElement;
                       target.style.height = 'auto';
@@ -1034,7 +1065,7 @@ function ChatComponent() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        if (input.trim()) {
+                        if (input.trim() && rateLimit?.remaining !== 0) {
                           e.currentTarget.form?.requestSubmit();
                         }
                       }
@@ -1042,7 +1073,7 @@ function ChatComponent() {
                   />
                   <button
                     type="submit"
-                    disabled={!input.trim()}
+                    disabled={!input.trim() || rateLimit?.remaining === 0}
                     className="p-3 text-neutral-400 hover:text-white disabled:opacity-50 transition-colors shrink-0 cursor-pointer"
                   >
                     <Send size={20} className={input.trim() ? "text-blue-500" : ""} />
@@ -1055,24 +1086,33 @@ function ChatComponent() {
                 <div className="mt-2 px-1">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-neutral-600">
-                      Batas pesan: <span className={`font-semibold ${rateLimit.remaining <= 3 ? 'text-red-400' :
-                        rateLimit.remaining <= 8 ? 'text-yellow-400' : 'text-neutral-500'
-                        }`}>{rateLimit.remaining}/{rateLimit.max}</span> tersisa
+                      Pesan hari ini: <span className={`font-semibold ${
+                        rateLimit.remaining === 0 ? 'text-red-400' :
+                        rateLimit.remaining <= 5 ? 'text-red-400' :
+                        rateLimit.remaining <= 10 ? 'text-yellow-400' : 'text-neutral-500'
+                      }`}>{rateLimit.remaining}/{rateLimit.max}</span> tersisa
                     </span>
                     {rateLimit.used > 0 && (
                       <span className="text-[10px] text-neutral-700">
-                        reset dalam {rlCountdown}d
+                        reset dalam {rlCountdown}j
                       </span>
                     )}
                   </div>
                   <div className="h-0.5 bg-neutral-800 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-500 ${rateLimit.remaining <= 3 ? 'bg-red-500' :
-                        rateLimit.remaining <= 8 ? 'bg-yellow-500' : 'bg-blue-500/50'
-                        }`}
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        rateLimit.remaining === 0 ? 'bg-red-600' :
+                        rateLimit.remaining <= 5 ? 'bg-red-500' :
+                        rateLimit.remaining <= 10 ? 'bg-yellow-500' : 'bg-blue-500/50'
+                      }`}
                       style={{ width: `${(rateLimit.used / rateLimit.max) * 100}%` }}
                     />
                   </div>
+                  {rateLimit.remaining === 0 && (
+                    <p className="text-[10px] text-red-400 mt-1">
+                      ⛔ Kuota harian habis. Input dinonaktifkan hingga reset ({rlCountdown}j lagi).
+                    </p>
+                  )}
                 </div>
               )}
             </div>

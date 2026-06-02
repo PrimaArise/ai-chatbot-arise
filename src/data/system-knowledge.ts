@@ -8,7 +8,7 @@
 export const BUILT_IN_KNOWLEDGE = `
 PANDUAN PENGGUNA — AI ARISE CHATBOT
 =====================================
-Terakhir diperbarui: Juni 2026
+Terakhir diperbarui: 2 Juni 2026
 
 ## APA ITU AI ARISE?
 
@@ -66,9 +66,11 @@ Manajemen dokumen:
 - Tab "Kelola Chunks": lihat dan edit isi knowledge base per grup
 
 ### Rate Limit
-- Batas 20 pesan per menit per akun
-- Status sisa pesan ditampilkan di area input ("Batas pesan: X tersisa")
-- Jika batas tercapai, tunggu hingga window 1 menit reset
+- Batas 40 pesan per hari per akun (window 24 jam)
+- Progress bar sisa pesan ditampilkan di bawah kolom input
+- Peringatan otomatis muncul saat sisa 5 pesan (⚠️) dan saat kuota habis (⛔)
+- Input dinonaktifkan secara otomatis saat kuota 0 — akan aktif kembali saat window 24 jam reset
+- Batas ini disesuaikan dengan kapasitas Groq API free-tier (~100.000 token/hari)
 
 ### Reset Password
 - Buka /forgot-password
@@ -97,8 +99,11 @@ A: Saat Anda mengupload dokumen, teks dipotong menjadi potongan kecil (chunk) se
 Q: Mengapa AI tidak menjawab berdasarkan dokumen saya?
 A: Pastikan toggle "Knowledge Base" aktif saat chat, dan dokumen sudah berhasil diindeks (muncul di tab "Kelola Chunks").
 
-Q: Berapa batas pesan per menit?
-A: 20 pesan per menit per akun.
+Q: Berapa batas pesan per hari?
+A: 40 pesan per hari per akun. Kuota direset setiap 24 jam. Jika sudah habis, input akan dinonaktifkan secara otomatis dan muncul peringatan berapa jam lagi hingga reset.
+
+Q: Mengapa batasnya 40 pesan per hari?
+A: Arise menggunakan Groq API free-tier yang memiliki batas token per hari (TPD). Setiap percakapan menggunakan sekitar 1.800 token, sehingga batas 40 pesan per hari memberi buffer keamanan agar kuota tidak habis di tengah hari.
 
 Q: Apa perbedaan KB aktif vs KB nonaktif?
 A: KB aktif: AI menjawab berdasarkan dokumen yang Anda upload. KB nonaktif: AI menjawab dari pengetahuan umum model sambil tetap memiliki informasi dasar tentang sistem AI Arise.
