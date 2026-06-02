@@ -27,9 +27,10 @@ const RAG_DISTANCE_THRESHOLD = 0.55;
 
 /**
  * Threshold fallback (pass 2) — digunakan bila pass 1 tidak menemukan hasil.
- * Lebih longgar agar pertanyaan pendek / ambigu masih dapat konteks.
+ * Dijaga ketat agar chunk yang tidak relevan tidak lolos sebagai "konteks".
+ * (diturunkan dari 0.72 → 0.62 untuk mencegah bocor jawaban dari pengetahuan umum)
  */
-const RAG_FALLBACK_THRESHOLD = 0.72;
+const RAG_FALLBACK_THRESHOLD = 0.62;
 
 /**
  * Jumlah chunk RAG yang diambil (top-k).
@@ -143,7 +144,7 @@ async function embedText(text: string): Promise<number[]> {
 async function retrieveRelevantContext(
     messages: { role: string; content: string }[],
     userId: string
-): Promise<{ context: string; citations: ChunkCitation[] }> {
+): Promise<{ context: string; citations: ChunkCitation[]; isStrictMatch: boolean }> {
     try {
         // Ambil RAG_QUERY_WINDOW pesan user terakhir sebagai query
         const recentUserMessages = messages
@@ -170,6 +171,9 @@ async function retrieveRelevantContext(
             LIMIT ${RAG_TOP_K}
         `;
 
+        // isStrictMatch = true jika chunks berasal dari pass 1 (threshold ketat)
+        let isStrictMatch = docs.length > 0;
+
         // ── Pass 2: fallback — jika pass 1 kosong, coba threshold lebih longgar ──
         if (!docs || docs.length === 0) {
             console.log('[RAG] Pass 1 kosong, mencoba fallback threshold', RAG_FALLBACK_THRESHOLD);
@@ -181,10 +185,11 @@ async function retrieveRelevantContext(
                 ORDER BY distance ASC
                 LIMIT ${RAG_TOP_K}
             `;
+            isStrictMatch = false; // fallback = kemungkinan kurang relevan
         }
 
         if (!docs || docs.length === 0) {
-            return { context: '', citations: [] };
+            return { context: '', citations: [], isStrictMatch: false };
         }
 
         const context = docs
@@ -198,10 +203,11 @@ async function retrieveRelevantContext(
             distance: Math.round(doc.distance * 10000) / 10000,
         }));
 
-        return { context, citations };
+        console.log(`[RAG] ${docs.length} chunk ditemukan (isStrictMatch=${isStrictMatch}, top distance=${docs[0]?.distance?.toFixed(4)})`);
+        return { context, citations, isStrictMatch };
     } catch (err) {
         console.error('[RAG] Gagal mengambil konteks:', err);
-        return { context: '', citations: [] };
+        return { context: '', citations: [], isStrictMatch: false };
     }
 }
 
@@ -326,9 +332,9 @@ export async function POST(req: Request) {
         const kbExists = useKB && await hasKnowledgeBase(user.id);
 
         // 🔍 Ambil konteks relevan dari knowledge base user ini via RAG
-        const { context: ragContext, citations } = kbExists
+        const { context: ragContext, citations, isStrictMatch } = kbExists
             ? await retrieveRelevantContext(rawMessages, user.id)
-            : { context: '', citations: [] };
+            : { context: '', citations: [], isStrictMatch: false };
 
         // 📋 Bangun system prompt berdasarkan mode
         let systemPrompt: string;
@@ -346,29 +352,32 @@ ${BUILT_IN_KNOWLEDGE}
 
         } else if (kbExists && ragContext) {
             // ✅ MODE AKTIF: KB ada + konteks relevan ditemukan
-            systemPrompt = `Anda adalah AI chatbot bernama Arise yang dirancang untuk menjawab pertanyaan berdasarkan dokumen yang tersedia.
+            // isStrictMatch=false berarti chunk dari fallback (kurang relevan) → prompt lebih waspada
+            const strictnessNote = isStrictMatch
+                ? '' // pass 1: high confidence
+                : '\n⚠️ PERINGATAN INTERNAL: Konteks yang ditemukan mungkin kurang relevan (fallback match). Tetap larang penggunaan pengetahuan umum — gunakan kalimat penolakan jika tidak yakin.\n';
 
-ATURAN PERILAKU — IKUTI DENGAN TEPAT:
+            systemPrompt = `Anda adalah Arise, asisten khusus berbasis dokumen. Tugas Anda HANYA menjawab berdasarkan dokumen yang disediakan.
+${strictnessNote}
+⛔ LARANGAN MUTLAK — TIDAK ADA PENGECUALIAN:
+- DILARANG KERAS menggunakan pengetahuan training model untuk menjawab pertanyaan substantif.
+- DILARANG membuat inferensi, asumsi, atau menambahkan informasi dari luar konteks dokumen.
+- DILARANG menjawab pertanyaan di luar dokumen walaupun Anda "tahu" jawabannya.
 
-1. SMALL TALK (sapaan, basa-basi seperti "halo", "hai", "selamat pagi"):
-   → Balas dengan ramah dan jelaskan fungsi Anda secara singkat.
-   → Contoh: "Halo! Saya AI chatbot yang siap membantu menjawab pertanyaan berdasarkan dokumen yang tersedia. Silakan ajukan pertanyaan Anda."
+✅ KALIMAT PENOLAKAN RESMI (gunakan persis ini bila informasi tidak ada di dokumen):
+"Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia."
 
-2. META QUESTION (pertanyaan tentang diri Anda seperti "kamu apa?", "siapa kamu?", "kamu bisa apa?"):
-   → Jawab berdasarkan INFORMASI SISTEM di bawah ini.
+✅ YANG DIIZINKAN:
+1. Sapaan / small talk ("halo", "selamat pagi", dll.)
+   → Balas ramah, jelaskan fungsi Anda secara singkat.
+2. Pertanyaan tentang sistem Arise ("kamu siapa?", "kamu bisa apa?")
+   → Jawab HANYA berdasarkan INFORMASI SISTEM di bawah.
+3. Pertanyaan yang jawabannya ADA di KONTEKS DOKUMEN
+   → Jawab berdasarkan dokumen. Gabungkan semua referensi relevan. Jangan sebut kata "referensi" atau "dokumen" kepada user.
+4. Pertanyaan lain (apapun topiknya) yang jawabannya TIDAK ada di dokumen
+   → Wajib gunakan KALIMAT PENOLAKAN RESMI di atas. Tidak ada pengecualian.
 
-3. PERTANYAAN SESUAI DOKUMEN:
-   → Jawab berdasarkan KONTEKS DOKUMEN USER di bawah ini.
-   → Gunakan SELURUH informasi yang relevan — jangan hanya ambil sebagian.
-   → Jika jawaban tersebar di beberapa referensi, GABUNGKAN semuanya menjadi jawaban komprehensif.
-   → Jawab secara natural — jangan sebut "referensi" atau "dokumen" kepada pengguna.
-
-4. PERTANYAAN DI LUAR DOKUMEN:
-   → Jika tidak ada info relevan dalam konteks dokumen, cek dulu INFORMASI SISTEM.
-   → Jika tetap tidak ada, tolak dengan sopan: "Maaf, saya tidak menemukan informasi terkait hal tersebut dalam basis pengetahuan saya."
-   → JANGAN menambahkan informasi dari pengetahuan umum Anda.
-
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA. Jika Indonesia → Indonesia, jika English → English.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama (Indonesia → Indonesia, English → English).
 
 === INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
 ${BUILT_IN_KNOWLEDGE}
@@ -380,19 +389,21 @@ ${ragContext}
 
         } else if (kbExists && !ragContext) {
             // ⚠️ MODE AKTIF: KB ada TAPI tidak ada konteks relevan untuk pertanyaan ini
-            systemPrompt = `Anda adalah AI chatbot bernama Arise yang dirancang untuk menjawab pertanyaan berdasarkan dokumen yang tersedia.
+            systemPrompt = `Anda adalah Arise, asisten khusus berbasis dokumen.
 
-ATURAN PERILAKU:
+⛔ LARANGAN MUTLAK: Sistem pencarian tidak menemukan dokumen yang relevan dengan pertanyaan ini.
+ANDA HARUS menolak menjawab pertanyaan substantif — TIDAK ADA PENGECUALIAN.
+DILARANG KERAS menggunakan pengetahuan training model untuk menjawab, walaupun Anda "tahu" jawabannya.
 
-1. SMALL TALK & META QUESTION:
-   → Jawab ramah berdasarkan INFORMASI SISTEM di bawah.
+✅ KALIMAT PENOLAKAN RESMI (gunakan persis ini):
+"Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia. Coba tanyakan dengan kata kunci yang berbeda."
 
-2. SEMUA PERTANYAAN LAINNYA:
-   → Cek dulu apakah pertanyaan bisa dijawab dari INFORMASI SISTEM.
-   → Jika tidak ada di sana, balas jujur: "Saya tidak menemukan informasi spesifik mengenai hal tersebut dalam basis pengetahuan saya. Coba tanyakan dengan kata-kata berbeda."
-   → JANGAN menjawab dari pengetahuan umum di luar informasi sistem.
+✅ SATU-SATUNYA PENGECUALIAN YANG DIIZINKAN:
+1. Sapaan / small talk → balas ramah, jelaskan fungsi Anda.
+2. Pertanyaan tentang sistem Arise → jawab HANYA dari INFORMASI SISTEM di bawah.
+3. Semua hal lain → gunakan KALIMAT PENOLAKAN RESMI di atas.
 
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user dan SELALU jawab dalam bahasa yang SAMA.
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama.
 
 === INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
 ${BUILT_IN_KNOWLEDGE}
