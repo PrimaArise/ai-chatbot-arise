@@ -27,10 +27,12 @@ const RAG_DISTANCE_THRESHOLD = 0.55;
 
 /**
  * Threshold fallback (pass 2) — digunakan bila pass 1 tidak menemukan hasil.
- * Dijaga ketat agar chunk yang tidak relevan tidak lolos sebagai "konteks".
- * (diturunkan dari 0.72 → 0.62 untuk mencegah bocor jawaban dari pengetahuan umum)
+ * Sengaja dibiarkan cukup longgar agar pertanyaan informal/colloquial yang topiknya
+ * ada di KB tetap bisa menemukan chunk relevan.
+ * Gatekeeper utama ada di system prompt (LLM mengevaluasi sendiri relevansi konteks),
+ * bukan di threshold ini.
  */
-const RAG_FALLBACK_THRESHOLD = 0.62;
+const RAG_FALLBACK_THRESHOLD = 0.68;
 
 /**
  * Jumlah chunk RAG yang diambil (top-k).
@@ -100,14 +102,16 @@ async function expandQuery(rawQuery: string): Promise<string> {
     try {
         const { text } = await generateText({
             model: groq('llama-3.3-70b-versatile'),
-            system: `You are a search query optimizer. Your task is to rewrite and expand a user's question into a more detailed, information-rich search query that will better match relevant document chunks.
+            system: `You are a search query optimizer for a RAG document retrieval system.
+Your task is to rewrite a user's question into a rich, technical search query that maximizes the chance of matching relevant document chunks — especially when the user uses informal, colloquial, or non-technical language.
 
 Rules:
-- Rewrite the query to be more descriptive and include synonyms/related terms
-- Keep it in the SAME language as the original question
-- Output ONLY the expanded query, nothing else
+- Translate informal/colloquial terms to their formal/technical equivalents (e.g., "kebobolan" → "kerentanan keamanan, data breach, serangan siber"; "lemot" → "performa lambat, bottleneck")
+- Include synonyms, related technical terms, and broader/narrower concepts
+- Keep the query in the SAME language as the original question
+- Output ONLY the expanded query — no explanation, no bullet points, just the query text
 - Maximum 3 sentences
-- Do NOT answer the question, just expand/rephrase it for search purposes`,
+- Do NOT answer the question, only expand/rephrase it for document search purposes`,
             prompt: `Original question: "${rawQuery}"\n\nExpanded search query:`,
         });
         return text.trim() || rawQuery;
@@ -351,35 +355,36 @@ ${BUILT_IN_KNOWLEDGE}
 === AKHIR INFORMASI SISTEM ===`;
 
         } else if (kbExists && ragContext) {
-            // ✅ MODE AKTIF: KB ada + konteks relevan ditemukan
-            // isStrictMatch=false berarti chunk dari fallback (kurang relevan) → prompt lebih waspada
-            const strictnessNote = isStrictMatch
-                ? '' // pass 1: high confidence
-                : '\n⚠️ PERINGATAN INTERNAL: Konteks yang ditemukan mungkin kurang relevan (fallback match). Tetap larang penggunaan pengetahuan umum — gunakan kalimat penolakan jika tidak yakin.\n';
+            // ✅ MODE AKTIF: KB ada + konteks ditemukan (strict atau fallback)
+            // Strategi: LLM sendiri yang mengevaluasi apakah konteks cukup menjawab pertanyaan.
+            // Jika tidak cukup → wajib gunakan kalimat penolakan, bukan menjawab dari pengetahuan umum.
+            const fallbackNote = isStrictMatch
+                ? ''
+                : '\n[CATATAN INTERNAL: Konteks di bawah ditemukan lewat pencarian luas (fallback). Evaluasi dengan cermat apakah konteks ini benar-benar menjawab pertanyaan user sebelum merespons.]\n';
 
-            systemPrompt = `Anda adalah Arise, asisten khusus berbasis dokumen. Tugas Anda HANYA menjawab berdasarkan dokumen yang disediakan.
-${strictnessNote}
-⛔ LARANGAN MUTLAK — TIDAK ADA PENGECUALIAN:
-- DILARANG KERAS menggunakan pengetahuan training model untuk menjawab pertanyaan substantif.
-- DILARANG membuat inferensi, asumsi, atau menambahkan informasi dari luar konteks dokumen.
-- DILARANG menjawab pertanyaan di luar dokumen walaupun Anda "tahu" jawabannya.
+            systemPrompt = `Anda adalah Arise, asisten berbasis dokumen. Anda menjawab pertanyaan HANYA berdasarkan dokumen yang tersedia.
+${fallbackNote}
+⛔ LARANGAN KERAS:
+- DILARANG menggunakan pengetahuan training model untuk menjawab pertanyaan substantif.
+- DILARANG menambahkan fakta, data, atau informasi yang tidak ada dalam KONTEKS DOKUMEN di bawah.
+- Jika konteks dokumen tidak cukup menjawab pertanyaan → wajib gunakan kalimat penolakan.
 
-✅ KALIMAT PENOLAKAN RESMI (gunakan persis ini bila informasi tidak ada di dokumen):
-"Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia."
-
-✅ YANG DIIZINKAN:
+✅ CARA MERESPONS:
 1. Sapaan / small talk ("halo", "selamat pagi", dll.)
    → Balas ramah, jelaskan fungsi Anda secara singkat.
 2. Pertanyaan tentang sistem Arise ("kamu siapa?", "kamu bisa apa?")
-   → Jawab HANYA berdasarkan INFORMASI SISTEM di bawah.
-3. Pertanyaan yang jawabannya ADA di KONTEKS DOKUMEN
-   → Jawab berdasarkan dokumen. Gabungkan semua referensi relevan. Jangan sebut kata "referensi" atau "dokumen" kepada user.
-4. Pertanyaan lain (apapun topiknya) yang jawabannya TIDAK ada di dokumen
-   → Wajib gunakan KALIMAT PENOLAKAN RESMI di atas. Tidak ada pengecualian.
+   → Jawab berdasarkan INFORMASI SISTEM di bawah.
+3. Pertanyaan yang dapat dijawab dari KONTEKS DOKUMEN
+   → Evaluasi konteks: apakah ada informasi yang relevan dengan pertanyaan ini, bahkan secara tidak langsung?
+   → Jika ya: jawab berdasarkan dokumen. Hubungkan informasi yang tersebar. Jangan sebut "dokumen" atau "referensi".
+   → Jika TIDAK ada di konteks: gunakan kalimat penolakan (jangan jawab dari pengetahuan umum).
 
-PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama (Indonesia → Indonesia, English → English).
+✅ KALIMAT PENOLAKAN (gunakan jika konteks tidak menjawab pertanyaan):
+"Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia."
 
-=== INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
+PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama.
+
+=== INFORMASI SISTEM AI ARISE ===
 ${BUILT_IN_KNOWLEDGE}
 === AKHIR INFORMASI SISTEM ===
 
@@ -388,24 +393,21 @@ ${ragContext}
 === AKHIR KONTEKS DOKUMEN ===`;
 
         } else if (kbExists && !ragContext) {
-            // ⚠️ MODE AKTIF: KB ada TAPI tidak ada konteks relevan untuk pertanyaan ini
-            systemPrompt = `Anda adalah Arise, asisten khusus berbasis dokumen.
+            // ⚠️ MODE AKTIF: KB ada TAPI sistem pencarian tidak menemukan dokumen relevan sama sekali
+            systemPrompt = `Anda adalah Arise, asisten berbasis dokumen.
 
-⛔ LARANGAN MUTLAK: Sistem pencarian tidak menemukan dokumen yang relevan dengan pertanyaan ini.
-ANDA HARUS menolak menjawab pertanyaan substantif — TIDAK ADA PENGECUALIAN.
-DILARANG KERAS menggunakan pengetahuan training model untuk menjawab, walaupun Anda "tahu" jawabannya.
+⛔ PENTING: Sistem pencarian dokumen tidak menemukan konteks yang relevan untuk pertanyaan ini.
+DILARANG menjawab pertanyaan substantif dari pengetahuan umum model — gunakan kalimat penolakan.
 
-✅ KALIMAT PENOLAKAN RESMI (gunakan persis ini):
-"Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia. Coba tanyakan dengan kata kunci yang berbeda."
-
-✅ SATU-SATUNYA PENGECUALIAN YANG DIIZINKAN:
+✅ CARA MERESPONS:
 1. Sapaan / small talk → balas ramah, jelaskan fungsi Anda.
-2. Pertanyaan tentang sistem Arise → jawab HANYA dari INFORMASI SISTEM di bawah.
-3. Semua hal lain → gunakan KALIMAT PENOLAKAN RESMI di atas.
+2. Pertanyaan tentang sistem Arise → jawab dari INFORMASI SISTEM di bawah.
+3. Pertanyaan lain apapun → gunakan kalimat penolakan berikut:
+   "Maaf, saya tidak menemukan informasi mengenai hal tersebut dalam basis pengetahuan yang tersedia. Coba tanyakan dengan kata kunci yang berbeda."
 
 PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama.
 
-=== INFORMASI SISTEM AI ARISE (SELALU TERSEDIA) ===
+=== INFORMASI SISTEM AI ARISE ===
 ${BUILT_IN_KNOWLEDGE}
 === AKHIR INFORMASI SISTEM ===`;
 
