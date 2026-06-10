@@ -63,7 +63,7 @@ RAG adalah teknik yang memungkinkan AI menjawab berdasarkan dokumen spesifik yan
 - 📤 **Export Chat** — Ekspor riwayat percakapan ke file `.txt`
 - 📊 **Dashboard Statistik** — Lihat total chat, pesan, dan aktivitas 7 hari terakhir
 - 🌡️ **Adaptive Temperature** — Suhu model otomatis menyesuaikan mode: 0.5 (KB aktif/faktual) vs 0.7 (KB nonaktif/natural)
-- ⏱️ **Rate Limiting** — Pembatasan 20 pesan/hari per user untuk mencegah penyalahgunaan
+- ⏱️ **Rate Limiting** — Pembatasan 40 pesan/hari per user untuk mencegah penyalahgunaan
 - 📱 **Mobile Responsive** — Modal Kostumisasi AI, halaman auth, dan dashboard dioptimalkan untuk layar kecil
 
 ---
@@ -74,9 +74,9 @@ API chat dilindungi oleh **in-memory rate limiter**:
 
 | Parameter | Nilai |
 |---|---|
-| Maksimum request | 20 per hari |
+| Maksimum request | 40 per hari |
 | Per | User ID (Supabase) |
-| Window | 60 menit (sliding) |
+| Window | 24 jam |
 | Response saat limit | HTTP `429` + pesan waktu reset dalam jam |
 
 > **Catatan**: Rate limiter ini berbasis in-memory dan akan reset saat server restart. Untuk deployment multi-instance (misalnya Vercel dengan banyak serverless function), gunakan **Upstash Redis** sebagai pengganti.
