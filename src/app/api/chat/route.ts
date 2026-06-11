@@ -325,13 +325,13 @@ export async function POST(req: Request) {
             }).catch(err => console.error('Gagal membuat judul AI:', err));
         }
 
-    await prisma.message.create({
-        data: {
-            chatId,
-            content: lastUserMessage.content,
-            role: 'user',
-        },
-    });
+        await prisma.message.create({
+            data: {
+                chatId,
+                content: lastUserMessage.content,
+                role: 'user',
+            },
+        });
 
         // 🔀 KB Toggle — baca flag dari frontend (default: true = aktif)
         const useKB = kbEnabled !== false;
@@ -345,8 +345,9 @@ export async function POST(req: Request) {
             : { context: '', citations: [], isStrictMatch: false };
 
         // 🌡️ Temperature adaptif:
-        //   KB ON  → 0.3 (cukup strict untuk factual, tidak freeze di Groq seperti 0.1)
+        //   KB ON  → 0.3 (lebih strict untuk jawaban faktual; batas aman minimum Groq)
         //   KB OFF → 0.7 (natural, kreatif, cocok untuk percakapan bebas)
+        //   Catatan: temperature < 0.3 di Groq menyebabkan model menghasilkan 0 token (freeze)
         const chatTemperature = useKB ? 0.3 : 0.7;
 
         // 📋 Bangun system prompt berdasarkan mode
@@ -396,6 +397,9 @@ ${fallbackNote}
 
 ✅ KALIMAT PENOLAKAN (gunakan jika konteks tidak cukup menjawab):
 "Maaf, dokumen tidak menyebutkan informasi spesifik mengenai hal tersebut."
+
+⚠️ WAJIB: Selalu hasilkan teks sebagai output — JANGAN pernah diam atau menghasilkan respons kosong.
+Jika tidak ada jawaban yang valid dari dokumen, gunakan kalimat penolakan di atas.
 
 PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama.
 
@@ -453,7 +457,7 @@ ${BUILT_IN_KNOWLEDGE}
                     system: systemPrompt,
                     messages,
                     temperature: chatTemperature, // 0.1 = KB aktif (strict), 0.7 = KB nonaktif (natural)
-                    maxRetries: 2, // auto-retry saat Groq mengembalikan empty output atau transient error
+                    maxRetries: 3, // auto-retry saat Groq mengembalikan empty output atau transient error
                     experimental_transform: smoothStream({ delayInMs: 20 }),
                     onFinish: async ({ text }) => {
                         try {
