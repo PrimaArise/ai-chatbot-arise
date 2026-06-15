@@ -145,7 +145,7 @@ function ChatComponent() {
   const [ingestResult, setIngestResult] = useState<string | null>(null);
   const [chunks, setChunks] = useState<{ id: string; content: string; createdAt: string; userId: string; source: string }[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
-  // deletingChunkId: selalu null — loading state per-item dihapus (optimistic delete)
+  // deletingChunkId tidak digunakan karena penghapusan dilakukan secara optimistic (UI update instan)
   const deletingChunkId: string | null = null;
   const [expandedChunkId, setExpandedChunkId] = useState<string | null>(null);
   const [editingChunkId, setEditingChunkId] = useState<string | null>(null);
@@ -156,7 +156,7 @@ function ChatComponent() {
 
   // ===== Multi-select chunks =====
   const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set());
-  // isBulkDeleting: selalu false — loading state dihandle optimistically
+  // isBulkDeleting tidak digunakan karena bulk delete dilakukan secara optimistic
   const isBulkDeleting = false;
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 

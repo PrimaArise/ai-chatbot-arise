@@ -20,31 +20,29 @@ const MAX_HISTORY_MESSAGES = 10;
 
 /**
  * Threshold cosine distance untuk RAG retrieval (pass 1 — strict).
- * Dinaikkan dari 0.42 → 0.55 agar pertanyaan yang diparafrase / sinonim
- * tetap menangkap chunk yang relevan.
+ * Nilai yang lebih rendah berarti lebih ketat; hanya chunk yang benar-benar
+ * mirip dengan query yang akan diambil.
  */
 const RAG_DISTANCE_THRESHOLD = 0.55;
 
 /**
  * Threshold fallback (pass 2) — digunakan bila pass 1 tidak menemukan hasil.
- * Sengaja dibiarkan cukup longgar agar pertanyaan informal/colloquial yang topiknya
+ * Nilai lebih longgar agar pertanyaan informal atau colloquial yang topiknya
  * ada di KB tetap bisa menemukan chunk relevan.
- * Gatekeeper utama ada di system prompt (LLM mengevaluasi sendiri relevansi konteks),
- * bukan di threshold ini.
+ * Gatekeeper utama ada di system prompt (LLM mengevaluasi sendiri relevansi konteks).
  */
 const RAG_FALLBACK_THRESHOLD = 0.68;
 
 /**
- * Jumlah chunk RAG yang diambil (top-k).
- * Dikurangi 8 → 5: chunk ke-6,7,8 yang jauh dari query menambah noise
- * dan meningkatkan risiko hallucination pada model.
+ * Jumlah chunk RAG yang diambil per query (top-k).
+ * Terlalu banyak chunk dapat menambah noise dan meningkatkan risiko hallucination.
  */
 const RAG_TOP_K = 5;
 
 /**
  * Jumlah pesan user terakhir yang digabung sebagai query RAG.
- * Dikurangi 3 → 2: lebih fokus ke pertanyaan terkini,
- * mengurangi drift topik dari konteks percakapan sebelumnya.
+ * Difokuskan pada pesan terkini untuk mengurangi drift topik
+ * dari konteks percakapan yang jauh sebelumnya.
  */
 const RAG_QUERY_WINDOW = 2;
 
@@ -103,7 +101,7 @@ interface ChunkCitation {
 async function expandQuery(rawQuery: string): Promise<string> {
     try {
         const { text } = await generateText({
-            // ⚡ Model kecil cukup untuk query expansion — hemat TPD 70B untuk chat utama
+            // Model ringan digunakan untuk query expansion agar kuota model utama (70B) tetap efisien
             model: groq('llama-3.1-8b-instant'),
             system: `You are a search query optimizer for a RAG document retrieval system.
 Your task is to rewrite a user's question into a rich, technical search query that maximizes the chance of matching relevant document chunks — especially when the user uses informal, colloquial, or non-technical language.
@@ -160,7 +158,7 @@ async function retrieveRelevantContext(
             .map(m => m.content)
             .join('\n');
 
-        // 🔍 Expand query sebelum embed — lebih banyak sinyal semantik
+        // Expand query sebelum embed untuk menghasilkan sinyal semantik yang lebih kaya
         const expandedQuery = await expandQuery(recentUserMessages);
         console.log('[RAG] Expanded query:', expandedQuery.substring(0, 120));
 
@@ -262,12 +260,12 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        // ⏱️ Rate limiting: 20 request per menit per user
+        // Rate limiting: batasi jumlah request per user per hari
         const rl = checkRateLimit(user.id);
         if (!rl.allowed) {
             const jam = Math.ceil(rl.resetInMs / (1000 * 60 * 60));
             return NextResponse.json(
-                { error: `Batas pesan harian tercapai (20 pesan/hari). Kuota akan reset dalam ${jam} jam.` },
+                { error: `Batas pesan harian tercapai. Kuota akan reset dalam ${jam} jam.` },
                 { status: 429, headers: { 'Retry-After': String(Math.ceil(rl.resetInMs / 1000)) } }
             );
         }
@@ -282,7 +280,7 @@ export async function POST(req: Request) {
 
         const lastUserMessage = rawMessages[rawMessages.length - 1];
 
-        // 🔒 Trim history untuk mencegah token bloat sebelum dikirim ke LLM
+        // Potong history agar tidak melebihi batas token LLM
         const messages = trimMessages(rawMessages);
 
         // Karena Supabase Auth tidak secara otomatis membuat baris User di schema Prisma (public.User),
@@ -299,7 +297,7 @@ export async function POST(req: Request) {
 
         const isNewChat = rawMessages.length === 1;
 
-        // 🔥 Backend tetap kontrol userId
+        // Buat sesi chat baru jika belum ada; userId selalu dikontrol dari backend
         await prisma.chat.upsert({
             where: { id: chatId },
             update: {},
@@ -310,10 +308,10 @@ export async function POST(req: Request) {
             },
         });
 
-        // 🔥 Fitur Judul Cerdas (Berjalan diam-diam di background)
+        // Generate judul chat secara otomatis di background saat sesi baru dimulai
         if (isNewChat && lastUserMessage?.content) {
             generateText({
-                // ⚡ Model kecil cukup untuk generate judul — hemat TPD 70B
+                // Model ringan digunakan untuk generate judul agar kuota model utama tetap efisien
                 model: groq('llama-3.1-8b-instant'),
                 system: 'Anda adalah asisten perangkum. Buatlah judul super singkat (maksimal 3 kata) yang mencerminkan inti topik dari pesan pengguna. Jangan gunakan tanda kutip, titik, atau gaya kutipan.',
                 prompt: lastUserMessage.content,
@@ -333,28 +331,28 @@ export async function POST(req: Request) {
             },
         });
 
-        // 🔀 KB Toggle — baca flag dari frontend (default: true = aktif)
+        // Baca flag KB dari frontend; default true (KB aktif)
         const useKB = kbEnabled !== false;
 
-        // 🧠 Cek apakah knowledge base user ini sudah berisi dokumen (hanya kalau KB aktif)
+        // Cek apakah knowledge base user sudah berisi dokumen, hanya jika KB aktif
         const kbExists = useKB && await hasKnowledgeBase(user.id);
 
-        // 🔍 Ambil konteks relevan dari knowledge base user ini via RAG
+        // Ambil konteks relevan dari knowledge base user via pipeline RAG
         const { context: ragContext, citations, isStrictMatch } = kbExists
             ? await retrieveRelevantContext(rawMessages, user.id)
             : { context: '', citations: [], isStrictMatch: false };
 
-        // 🌡️ Temperature adaptif:
-        //   KB ON  → 0.3 (lebih strict untuk jawaban faktual; batas aman minimum Groq)
-        //   KB OFF → 0.7 (natural, kreatif, cocok untuk percakapan bebas)
+        // Temperature adaptif berdasarkan mode:
+        //   KB ON  → 0.3 (lebih deterministik untuk jawaban berbasis dokumen)
+        //   KB OFF → 0.7 (lebih natural dan kreatif untuk percakapan bebas)
         //   Catatan: temperature < 0.3 di Groq menyebabkan model menghasilkan 0 token (freeze)
         const chatTemperature = useKB ? 0.3 : 0.7;
 
-        // 📋 Bangun system prompt berdasarkan mode
+        // Bangun system prompt sesuai dengan mode KB yang aktif
         let systemPrompt: string;
 
         if (!useKB) {
-            // 🟢 MODE BEBAS: Knowledge Base dimatikan — AI bebas menjawab + selalu punya built-in knowledge
+            // MODE BEBAS: Knowledge Base dinonaktifkan — AI menjawab dari pengetahuan umum
             systemPrompt = `Anda adalah AI chatbot bernama Arise, asisten cerdas yang siap membantu.
 Anda dapat menjawab pertanyaan apapun dari pengetahuan umum Anda secara bebas, akurat, dan membantu.
 Jawab secara natural, ramah, dan profesional.
@@ -365,25 +363,25 @@ ${BUILT_IN_KNOWLEDGE}
 === AKHIR INFORMASI SISTEM ===`;
 
         } else if (kbExists && ragContext) {
-            // ✅ MODE AKTIF: KB ada + konteks ditemukan (strict atau fallback)
-            // Strategi: LLM sendiri yang mengevaluasi apakah konteks cukup menjawab pertanyaan.
-            // Jika tidak cukup → wajib gunakan kalimat penolakan, bukan menjawab dari pengetahuan umum.
+            // MODE AKTIF: KB ada dan konteks relevan ditemukan (dari pass strict atau fallback)
+            // LLM mengevaluasi sendiri apakah konteks cukup menjawab pertanyaan.
+            // Jika tidak cukup, wajib gunakan kalimat penolakan — bukan menjawab dari pengetahuan umum.
             const fallbackNote = isStrictMatch
                 ? ''
                 : '\n[CATATAN INTERNAL: Konteks di bawah ditemukan lewat pencarian luas (fallback). Evaluasi dengan cermat apakah konteks ini benar-benar menjawab pertanyaan user sebelum merespons.]\n';
 
             systemPrompt = `Anda adalah Arise, asisten berbasis dokumen. Anda menjawab pertanyaan HANYA berdasarkan dokumen yang tersedia.
 ${fallbackNote}
-⛔ LARANGAN KERAS — TIDAK ADA PENGECUALIAN:
+LARANGAN KERAS — TIDAK ADA PENGECUALIAN:
 - DILARANG menggunakan pengetahuan training model untuk menjawab pertanyaan substantif.
 - DILARANG menambahkan fakta, data, angka, atau informasi yang tidak ada dalam KONTEKS DOKUMEN di bawah.
 - DILARANG KERAS menyebut nama produk, merek, brand, software, atau contoh spesifik yang TIDAK tercantum secara eksplisit di dokumen,
   walaupun Anda mengetahui jawabannya dari pengetahuan umum.
-- Jika dokumen menyebut suatu KONSEP (misalnya: "antivirus", "firewall", "enkripsi") tapi tidak memberi contoh spesifik →
+- Jika dokumen menyebut suatu KONSEP (misalnya: "antivirus", "firewall", "enkripsi") tapi tidak memberi contoh spesifik,
   JANGAN tambahkan contoh dari pengetahuan Anda. Cukup sampaikan apa yang ada di dokumen, lalu gunakan kalimat penolakan untuk bagian yang tidak ada.
 - Riwayat percakapan sebelumnya BUKAN sumber fakta — hanya KONTEKS DOKUMEN yang menjadi acuan.
 
-✅ CARA MERESPONS:
+CARA MERESPONS:
 1. Sapaan / small talk ("halo", "selamat pagi", dll.)
    → Balas ramah, jelaskan fungsi Anda secara singkat.
 2. Pertanyaan tentang sistem Arise ("kamu siapa?", "kamu bisa apa?")
@@ -395,10 +393,10 @@ ${fallbackNote}
    → Jika konteks ada tapi TIDAK cukup (misalnya hanya menyebut konsep tanpa detail/contoh yang ditanyakan):
       → Sampaikan apa yang ada di dokumen, lalu tambahkan kalimat penolakan untuk bagian yang tidak ada.
 
-✅ KALIMAT PENOLAKAN (gunakan jika konteks tidak cukup menjawab):
+KALIMAT PENOLAKAN (gunakan jika konteks tidak cukup menjawab):
 "Maaf, dokumen tidak menyebutkan informasi spesifik mengenai hal tersebut."
 
-⚠️ WAJIB: Selalu hasilkan teks sebagai output — JANGAN pernah diam atau menghasilkan respons kosong.
+WAJIB: Selalu hasilkan teks sebagai output — JANGAN pernah diam atau menghasilkan respons kosong.
 Jika tidak ada jawaban yang valid dari dokumen, gunakan kalimat penolakan di atas.
 
 PENTING BAHASA: Deteksi bahasa dari pesan terakhir user. Selalu balas dalam bahasa yang sama.
@@ -412,13 +410,13 @@ ${ragContext}
 === AKHIR KONTEKS DOKUMEN ===`;
 
         } else if (kbExists && !ragContext) {
-            // ⚠️ MODE AKTIF: KB ada TAPI sistem pencarian tidak menemukan dokumen relevan sama sekali
+            // MODE AKTIF: KB ada tetapi sistem pencarian tidak menemukan dokumen yang relevan
             systemPrompt = `Anda adalah Arise, asisten berbasis dokumen.
 
-⛔ PENTING: Sistem pencarian dokumen tidak menemukan konteks yang relevan untuk pertanyaan ini.
+PENTING: Sistem pencarian dokumen tidak menemukan konteks yang relevan untuk pertanyaan ini.
 DILARANG menjawab pertanyaan substantif dari pengetahuan umum model — gunakan kalimat penolakan.
 
-✅ CARA MERESPONS:
+CARA MERESPONS:
 1. Sapaan / small talk → balas ramah, jelaskan fungsi Anda.
 2. Pertanyaan tentang sistem Arise → jawab dari INFORMASI SISTEM di bawah.
 3. Pertanyaan lain apapun → gunakan kalimat penolakan berikut:
@@ -431,7 +429,7 @@ ${BUILT_IN_KNOWLEDGE}
 === AKHIR INFORMASI SISTEM ===`;
 
         } else {
-            // 🔓 MODE STANDBY: KB aktif tapi kosong — belum ada dokumen diupload
+            // MODE STANDBY: KB aktif tetapi belum ada dokumen yang diunggah
             systemPrompt = `Anda adalah AI chatbot bernama Arise.
 Basis pengetahuan pengguna saat ini kosong (belum ada dokumen yang diunggah).
 Untuk pertanyaan teknis tentang Arise, gunakan INFORMASI SISTEM di bawah.
@@ -443,11 +441,11 @@ ${BUILT_IN_KNOWLEDGE}
 === AKHIR INFORMASI SISTEM ===`;
         }
 
-        // Buat data stream yang mengirim citations SEBELUM teks AI dimulai,
-        // lalu gabungkan dengan streamText sehingga useChat().data dapat membacanya.
+        // Buat data stream yang mengirim citations sebelum teks AI dimulai,
+        // lalu gabungkan dengan streamText agar useChat().data dapat membacanya.
         const dataStream = createDataStream({
             execute(writer) {
-                // 📎 Kirim metadata citations ke frontend sebagai data chunk
+                // Kirim metadata citations ke frontend sebagai data chunk
                 if (citations.length > 0) {
                     writer.writeData({ type: 'rag_citations', citations } as unknown as JSONValue);
                 }
@@ -456,7 +454,7 @@ ${BUILT_IN_KNOWLEDGE}
                     model: groq('llama-3.3-70b-versatile'),
                     system: systemPrompt,
                     messages,
-                    temperature: chatTemperature, // 0.1 = KB aktif (strict), 0.7 = KB nonaktif (natural)
+                    temperature: chatTemperature, // 0.3 = KB aktif (deterministik), 0.7 = KB nonaktif (natural)
                     maxRetries: 3, // auto-retry saat Groq mengembalikan empty output atau transient error
                     experimental_transform: smoothStream({ delayInMs: 20 }),
                     onFinish: async ({ text }) => {

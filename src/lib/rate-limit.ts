@@ -11,7 +11,7 @@
  * For multi-instance production, use Upstash Redis.
  */
 const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
-export const RATE_LIMIT_MAX = 40; // 100K TPD / ~1.800 token/respons ≈ 55 max → ambil 40 dengan buffer 25%
+export const RATE_LIMIT_MAX = 40; // Batas maksimum request per user per 24 jam, memberikan buffer aman dari kuota Groq free-tier
 const RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 jam
 
 export function checkRateLimit(userId: string): {
