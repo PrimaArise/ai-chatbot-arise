@@ -3,8 +3,8 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
-// Dashboard telah dihapus dari aplikasi.
-// Halaman ini hanya me-redirect ke /chat.
+// Halaman ini berfungsi sebagai redirect otomatis ke /chat.
+// Akses ke /dashboard akan langsung diarahkan tanpa menampilkan konten.
 export default function DashboardPage() {
     const router = useRouter();
     useEffect(() => { router.replace('/chat'); }, [router]);

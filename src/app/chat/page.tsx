@@ -701,7 +701,7 @@ function ChatComponent() {
       const res = await fetch('/api/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: addChunkContent.trim(), source: newGroupName.trim(), isGlobal: false }),
+        body: JSON.stringify({ content: addChunkContent.trim(), source: newGroupName.trim() }),
       });
       const data = await res.json();
       if (res.ok) {

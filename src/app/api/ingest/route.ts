@@ -214,7 +214,7 @@ async function ingestDocument(rawText: string, source: string, userId: string): 
 // ============================================================
 export async function POST(req: Request) {
     try {
-        // 🔒 Auth: hanya user yang sudah login yang bisa ingest dokumen
+        // Auth: hanya user yang sudah login yang bisa mengingest dokumen
         const supabase = await getSupabaseServer();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
@@ -273,7 +273,6 @@ export async function POST(req: Request) {
                 );
             }
 
-            // isGlobal selalu false (dihapus dari skema)
 
         } else {
             // JSON body

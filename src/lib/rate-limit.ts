@@ -1,11 +1,9 @@
 /**
  * In-memory rate limiter.
- * 20 requests per 24 jam per userId.
+ * 40 requests per 24 jam per userId.
  *
- * Disesuaikan dengan Groq free-tier TPD:
- *  - llama-3.3-70b-versatile: 100.000 token/hari
- *  - Rata-rata ~2.000 token/respons → max ~50 request/hari (shared semua user)
- *  - Limit 20/user/hari memberi ruang yang aman untuk beberapa user sekaligus
+ * Batas ini disesuaikan dengan kapasitas Groq API free-tier
+ * agar kuota harian tidak habis di tengah hari meski ada beberapa user aktif.
  *
  * Note: Works for single-server deployment.
  * For multi-instance production, use Upstash Redis.

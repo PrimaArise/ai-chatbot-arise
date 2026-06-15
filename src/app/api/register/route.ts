@@ -18,7 +18,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Email dan password diperlukan.' }, { status: 400 });
         }
 
-        // 📝 Daftarkan user via Supabase Auth (server-side, anon key)
+        // Daftarkan user via Supabase Auth (server-side, anon key)
         const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -34,16 +34,16 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Pendaftaran gagal — user tidak ditemukan.' }, { status: 400 });
         }
 
-        // 💾 Simpan user di Prisma
+        // Simpan user ke tabel User di Prisma; ON CONFLICT DO NOTHING untuk idempotency
         await prisma.$executeRaw`
-            INSERT INTO "User" (id, email, password, role, "createdAt")
-            VALUES (${data.user.id}, ${data.user.email ?? email}, 'supabase-auth-managed', 'user', NOW())
+            INSERT INTO "User" (id, email, password, "createdAt")
+            VALUES (${data.user.id}, ${data.user.email ?? email}, 'supabase-auth-managed', NOW())
             ON CONFLICT (id) DO NOTHING
         `;
 
         return NextResponse.json({
             success: true,
-            message: '✅ Pendaftaran berhasil! Silakan login.',
+            message: 'Pendaftaran berhasil! Silakan login.',
         });
     } catch (error) {
         console.error('[POST /api/register] Error:', error);
